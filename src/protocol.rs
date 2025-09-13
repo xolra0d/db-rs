@@ -94,7 +94,7 @@ impl Decoder for Protocol {
         let our_data = buf.split_to(HEADER_SIZE + body_size).freeze();
         let our_data = our_data.slice(HEADER_SIZE..);
         println!("bytes left: {:?}", buf);
-        Command::try_from(our_data).map(|command| Some(command))
+        Command::try_from(our_data).map(Some)
     }
 }
 
