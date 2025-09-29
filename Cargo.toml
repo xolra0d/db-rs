@@ -1,11 +1,10 @@
-
 [package]
-name = "db-rs"
+name = "touchhouse"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-tokio = { version = "1.47.1", features = ["full"] }
+tokio = { version = "1.47.1", features = ["macros", "rt-multi-thread", "net"] }
 tokio-util = { version = "0.7.16", features = ["codec"] }
 futures = "0.3.31"
 log = "0.4.28"
