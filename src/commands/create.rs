@@ -2,8 +2,8 @@ use crate::commands::DatabaseCommand;
 use crate::engine::{Engine, FieldType};
 use crate::protocol::{Command, CommandError, CommandResult};
 
-use std::str::from_utf8;
 use std::path::Path;
+use std::str::from_utf8;
 
 /// Command for creating databases and tables.
 /// ### Examples
@@ -23,25 +23,25 @@ fn validate_name(name: &str) -> CommandResult<()> {
             format!("Name must be at least {} characters long", MIN_NAME_LENGTH).into(),
         ));
     }
-    
+
     if name.len() > MAX_NAME_LENGTH {
         return Err(CommandError::ExecutionError(
             format!("Name must be at most {} characters long", MAX_NAME_LENGTH).into(),
         ));
     }
-    
+
     if !name.chars().all(|c| ALLOWED_NAME_CHARS.contains(c)) {
         return Err(CommandError::ExecutionError(
             "Name can only contain alphanumeric characters and underscores".into(),
         ));
     }
-    
+
     if name.starts_with('_') {
         return Err(CommandError::ExecutionError(
             "Name cannot start with underscore".into(),
         ));
     }
-    
+
     Ok(())
 }
 
@@ -75,7 +75,8 @@ impl DatabaseCommand for CreateCommand {
             b"table" => {
                 if args.len() < 3 {
                     return Err(CommandError::ExecutionError(
-                        "Usage: create table <db_name> <table_name> [field_name:field_type...]".into(),
+                        "Usage: create table <db_name> <table_name> [field_name:field_type...]"
+                            .into(),
                     ));
                 }
                 create_table(&args[1..], engine)
@@ -161,17 +162,21 @@ fn create_table(args: &[Command], engine: &Engine) -> CommandResult<Command> {
     }
 
     let table_full_path = db_path.join(table_name_str);
-    
+
     // Check if table already exists
     if table_full_path.exists() {
         return Err(CommandError::ExecutionError(
-            format!("Table '{}' already exists in database '{}'", table_name_str, db_name_str).into(),
+            format!(
+                "Table '{}' already exists in database '{}'",
+                table_name_str, db_name_str
+            )
+            .into(),
         ));
     }
 
     // Parse fields more efficiently
     let fields = parse_fields(&args[2..])?;
-    
+
     if fields.is_empty() {
         return Err(CommandError::ExecutionError(
             "Table must have at least one field".into(),
@@ -189,14 +194,14 @@ fn create_table(args: &[Command], engine: &Engine) -> CommandResult<Command> {
 
 /// Parse field definitions from command arguments
 fn parse_fields(args: &[Command]) -> CommandResult<Vec<(String, FieldType)>> {
-    if args.len() % 2 != 0 {
+    if !args.len().is_multiple_of(2) {
         return Err(CommandError::ExecutionError(
             "Field definitions must come in pairs (name, type)".into(),
         ));
     }
 
     let mut fields = Vec::with_capacity(args.len() / 2);
-    
+
     for chunk in args.chunks_exact(2) {
         let Command::String(field_name) = &chunk[0] else {
             return Err(CommandError::ExecutionError(
@@ -212,14 +217,14 @@ fn parse_fields(args: &[Command]) -> CommandResult<Vec<(String, FieldType)>> {
             ));
         };
         let field_type = Engine::parse_field_type(field_type)?;
-        
+
         // Check for duplicate field names
         if fields.iter().any(|(name, _)| name == field_name_str) {
             return Err(CommandError::ExecutionError(
                 format!("Duplicate field name: '{}'", field_name_str).into(),
             ));
         }
-        
+
         fields.push((field_name_str.to_string(), field_type));
     }
 
@@ -231,13 +236,19 @@ fn create_field_files(table_path: &Path, fields: &[(String, FieldType)]) -> Comm
     for (field_name, field_type) in fields {
         let field_type_str = field_type.to_str();
         let field_file_path = table_path.join(format!("{}.{}", field_name, field_type_str));
-        
-        std::fs::write(&field_file_path, field_type_str)
-            .map_err(|e| CommandError::ExecutionError(
-                format!("Failed to create field file '{}': {}", field_file_path.display(), e).into(),
-            ))?;
+
+        std::fs::write(&field_file_path, field_type_str).map_err(|e| {
+            CommandError::ExecutionError(
+                format!(
+                    "Failed to create field file '{}': {}",
+                    field_file_path.display(),
+                    e
+                )
+                .into(),
+            )
+        })?;
     }
-    
+
     Ok(())
 }
 
@@ -311,7 +322,7 @@ mod tests {
         let table_path = test_db_path.join("test_table");
         assert!(table_path.exists());
         assert!(table_path.is_dir());
-        
+
         // Check field files were created
         assert!(table_path.join("name.String").exists());
         assert!(table_path.join("job.String").exists());
