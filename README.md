@@ -82,7 +82,9 @@ ___
 - **[`futures`](https://docs.rs/futures/)** - Async primitives and utilities
 - **[`log`](https://docs.rs/log/)** - Logging facade
 - **[`env_logger`](https://docs.rs/env_logger/)** - Logging implementation
-- **[`tokio-util`](https://docs.rs/tokio-util/)** - Tokio utilities and codecs
+- **[`tokio_util`](https://docs.rs/tokio-util/)** - Tokio utilities and codecs
+- **[`serde`](https://docs.rs/serde/)** - Serializing and deserializing framework
+- **[`rmp_serde`](https://docs.rs/rmp-serde/)** - Rust MessagePack library with serde
 
 ## Allowed data types
 - **Array**: `Command::Array(sequence)`
