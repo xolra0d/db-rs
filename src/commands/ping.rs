@@ -11,7 +11,7 @@ impl DatabaseCommand for PingCommand {
     }
 
     fn execute(_args: &[Command], _engine: &Engine) -> CommandResult<Command> {
-        Ok(Command::String("PONG".into()))
+        Ok(Command::String(String::from("PONG")))
     }
 
     fn description() -> &'static str {
@@ -22,7 +22,6 @@ impl DatabaseCommand for PingCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio_util::bytes::Bytes;
 
     #[test]
     fn test_ping_without_arguments() {
@@ -42,7 +41,7 @@ mod tests {
     fn test_ping_with_arguments() {
         let db_dir = std::path::PathBuf::from("test_db");
         let engine = Engine::new(db_dir);
-        let args = vec![Command::String(Bytes::from("ignored"))];
+        let args = vec![Command::String(String::from("ignored"))];
         let result = PingCommand::execute(&args, &engine).unwrap();
 
         if let Command::String(response) = result {

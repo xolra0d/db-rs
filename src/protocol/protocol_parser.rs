@@ -1,5 +1,6 @@
 use crate::protocol::command::{Command, CommandError, CommandResult};
 
+use log::warn;
 use tokio_util::bytes::{Buf, BufMut, BytesMut};
 use tokio_util::codec::{Decoder, Encoder};
 
@@ -8,12 +9,12 @@ const HEADER_SIZE: usize = u32::BITS as usize / BYTE_SIZE;
 
 #[derive(Debug)]
 pub enum SendError {
-    IOError(std::io::Error),
+    IOError(String),
 }
 
 impl From<std::io::Error> for SendError {
-    fn from(e: std::io::Error) -> SendError {
-        SendError::IOError(e)
+    fn from(e: std::io::Error) -> Self {
+        Self::IOError(e.to_string())
     }
 }
 
@@ -40,8 +41,10 @@ impl Decoder for Protocol {
 
         // Now consume the header and the data
         buf.advance(HEADER_SIZE);
-        let our_data = buf.split_to(header).freeze();
-        Command::try_from(our_data).map(Some)
+        match rmp_serde::from_slice(&buf.split_to(header).freeze()) {
+            Ok(command) => Ok(Some(command)),
+            Err(e) => Err(CommandError::ExecutionError(e.to_string())),
+        }
     }
 }
 
@@ -53,20 +56,18 @@ impl Encoder<CommandResult<Command>> for Protocol {
         item: CommandResult<Command>,
         buf: &mut BytesMut,
     ) -> Result<(), Self::Error> {
-        match item {
-            Ok(item) => {
-                let command_bytes = item.encode_command();
-                let message_size = command_bytes.len() as u32;
-                buf.put_u32(message_size); // HEADER
-                buf.put(item.encode_command().as_slice()); // BODY
-            }
-            Err(error) => {
-                let error_bytes = error.encode_error();
-                let message_size = error_bytes.len() as u32;
-                buf.put_u32(message_size); // HEADER
-                buf.put(error_bytes.as_slice()); // BODY
-            }
-        };
+        let command_bytes = rmp_serde::to_vec(&item).map_err(|e| {
+            let msg = format!("Failed to encode command. Command: {item:?}, error: {e}",);
+
+            warn!("{}", &msg);
+            SendError::IOError(msg)
+        })?;
+
+        let message_size = command_bytes.len() as u32; // safe cast, bcs max msg length is u32::MAX bytes = 4.3GB 
+
+        buf.put_u32(message_size); // HEADER
+        buf.put(command_bytes.as_slice()); // BODY
+
         Ok(())
     }
 }

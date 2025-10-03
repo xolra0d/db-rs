@@ -10,7 +10,7 @@ use std::str::FromStr;
 pub struct Config {
     /// Socket address for server to run. Set by `HOST` and `PORT` environment variables. Default `HOST` value: 127.0.0.1. Default `PORT` value: 7070.
     socket_addr: SocketAddrV4,
-    /// Directory for storing databases. Set by `DB_DIR` environment variables. Default `DB_DIR` value: db_files.
+    /// Directory for storing databases. Set by `DB_DIR` environment variables. Default `DB_DIR` value: `db_files`.
     db_dir: PathBuf,
     /// Logging level. Set by `LOG_LEVEL` environment variable.
     /// ### Allowed values:
@@ -22,23 +22,23 @@ pub struct Config {
 
 /// Writes `msg` error and exits
 pub fn write_error_and_exit(msg: impl Display) -> ! {
-    error!("Fatal error: {}", msg);
+    error!("Fatal error: {msg}");
     std::process::exit(1);
 }
 
 impl Config {
     /// Get socket address from configuration
-    pub fn get_socket_addr(&self) -> SocketAddrV4 {
+    pub const fn get_socket_addr(&self) -> SocketAddrV4 {
         self.socket_addr
     }
 
     /// Get database directory from configuration
-    pub fn get_db_dir(&self) -> &PathBuf {
+    pub const fn get_db_dir(&self) -> &PathBuf {
         &self.db_dir
     }
 
     /// Get logging level from configuration
-    pub fn get_log_level(&self) -> log::Level {
+    pub const fn get_log_level(&self) -> log::Level {
         self.log_level
     }
 
@@ -63,8 +63,8 @@ impl Config {
 
         if !dir.is_dir() {
             write_error_and_exit(format!(
-                "Database path {:?} exists but is not a directory.",
-                dir
+                "Database path {} exists but is not a directory.",
+                dir.display()
             ));
         }
     }
@@ -76,8 +76,7 @@ impl Config {
             "2" => log::Level::Warn,
             "3" => log::Level::Error,
             _ => write_error_and_exit(format!(
-                "Invalid LOG_LEVEL '{}'. Valid values: 1 (INFO), 2 (WARN), 3 (ERROR)",
-                level_str
+                "Invalid LOG_LEVEL '{level_str}'. Valid values: 1 (INFO), 2 (WARN), 3 (ERROR)",
             )),
         }
     }
@@ -88,12 +87,10 @@ impl Config {
         let port = Self::get_env_or_default("PORT", "7070");
 
         let ip_addr = SocketAddrV4::new(
-            Ipv4Addr::from_str(&host).unwrap_or_else(|e| {
-                write_error_and_exit(format!("Invalid HOST '{}': {}.", host, e))
-            }),
-            u16::from_str(&port).unwrap_or_else(|e| {
-                write_error_and_exit(format!("Invalid PORT '{}': {}.", port, e))
-            }),
+            Ipv4Addr::from_str(&host)
+                .unwrap_or_else(|e| write_error_and_exit(format!("Invalid HOST '{host}': {e}."))),
+            u16::from_str(&port)
+                .unwrap_or_else(|e| write_error_and_exit(format!("Invalid PORT '{port}': {e}."))),
         );
 
         let db_dir = PathBuf::from(Self::get_env_or_default("DB_DIR", "db_files"));

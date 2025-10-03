@@ -4,9 +4,8 @@ ___
 ___
 ## Features
 - **Database Management**: Create and manage multiple databases with simple commands
-- **TCP Protocol**: Custom binary protocol for efficient communication
+- **Message Pack over TCP**: Efficient binary serialization format
 - **Concurrent Connections**: Handle multiple client connections simultaneously
-- **Memory Efficient**: Uses Arc for shared database directory references
 ___
 ## Available Commands
 - **`help`** - Shows all available commands
@@ -15,7 +14,7 @@ ___
 ## Modules
 - `src/main.rs` - Server entry point and connection handling
 - `src/engine.rs` - Core database engine and command execution
-- `src/commands/` - Modular command system (echo, help...)
+- `src/commands/` - command system (echo, help...)
 - `src/protocol/` - Custom binary protocol implementation
 - `src/config.rs` - Configuration management with environment variables
 ___
@@ -85,18 +84,10 @@ ___
 - **[`env_logger`](https://docs.rs/env_logger/)** - Logging implementation
 - **[`tokio-util`](https://docs.rs/tokio-util/)** - Tokio utilities and codecs
 
-## Protocol Specification
-The database uses a custom binary protocol for efficient communication:
-
-- **Array**: `*<count><elements...>`
-- **String**: `-<length><data>`
-- **Error**: `!<length><message>`
-
-Example: `[b'*', 2, b'-', 4, b'e', b'c', b'h', b'o', b'-', 5, b'h', b'e', b'l',  b'l', b'o']` represents `["echo", "hello"]`
-
 ## Allowed data types
-- String (denoted by `-`)
-- Array (denoted by `*`)
+- **Array**: `Command::Array(sequence)`
+- **String**: `Command::String(your_string)`
+
 
 ## Docs
 For more in-depth description read `cargo doc --open`.

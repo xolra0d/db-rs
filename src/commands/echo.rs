@@ -22,27 +22,26 @@ impl DatabaseCommand for EchoCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio_util::bytes::Bytes;
 
     #[test]
     fn test_echo_single_argument() {
-        let args = vec![Command::String(Bytes::from("hello"))];
+        let args = vec![Command::String(String::from("hello"))];
         let db_dir = std::path::PathBuf::from("test_db");
         let engine = Engine::new(db_dir);
         let result = EchoCommand::execute(&args, &engine).unwrap();
 
         if let Command::Array(echoed_args) = result {
-            assert_eq!(echoed_args, vec![Command::String(Bytes::from("hello"))]);
+            assert_eq!(echoed_args, vec![Command::String(String::from("hello"))]);
         } else {
-            panic!("Unexpected result: {:?}", result);
+            panic!("Unexpected result: {result:?}");
         }
     }
 
     #[test]
     fn test_echo_multiple_arguments() {
         let args = vec![
-            Command::String(Bytes::from("hello")),
-            Command::String(Bytes::from("world")),
+            Command::String(String::from("hello")),
+            Command::String(String::from("world")),
         ];
         let db_dir = std::path::PathBuf::from("test_db");
         let engine = Engine::new(db_dir);
@@ -52,12 +51,12 @@ mod tests {
             assert_eq!(
                 echoed_args,
                 vec![
-                    Command::String(Bytes::from("hello")),
-                    Command::String(Bytes::from("world"))
+                    Command::String(String::from("hello")),
+                    Command::String(String::from("world"))
                 ]
             );
         } else {
-            panic!("Unexpected result: {:?}", result);
+            panic!("Unexpected result: {result:?}");
         }
     }
 
@@ -71,7 +70,7 @@ mod tests {
         if let Command::Array(echoed_args) = result {
             assert_eq!(echoed_args, vec![]);
         } else {
-            panic!("Unexpected result: {:?}", result);
+            panic!("Unexpected result: {result:?}");
         }
     }
 }
