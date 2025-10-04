@@ -4,8 +4,7 @@ use log::warn;
 use tokio_util::bytes::{Buf, BufMut, BytesMut};
 use tokio_util::codec::{Decoder, Encoder};
 
-const BYTE_SIZE: usize = 8;
-const HEADER_SIZE: usize = u32::BITS as usize / BYTE_SIZE;
+const HEADER_SIZE: usize = size_of::<u32>();
 
 #[derive(Debug)]
 pub enum SendError {

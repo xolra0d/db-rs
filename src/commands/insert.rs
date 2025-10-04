@@ -1,6 +1,8 @@
 use crate::commands::DatabaseCommand;
 use crate::engine::{Engine, FieldType, TableSpecifier};
 use crate::protocol::{Command, CommandError, CommandResult};
+
+use crc32fast;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -127,6 +129,22 @@ impl DatabaseCommand for InsertCommand {
     }
 }
 
+fn command_to_bytes_rmp_crc(command: &Command) -> CommandResult<Vec<u8>> {
+    let Ok(encoded_msg) = rmp_serde::to_vec(&command) else {
+        return Err(CommandError::ExecutionError(format!(
+            "Couldn't deserialize your data: {command:?}"
+        )));
+    };
+    let length = (encoded_msg.len() as u32).to_le_bytes();
+    let checksum = crc32fast::hash(&encoded_msg).to_le_bytes();
+
+    let mut result = Vec::with_capacity(4 + encoded_msg.len() + 4);
+    result.extend(length);
+    result.extend(encoded_msg);
+    result.extend(checksum);
+    Ok(result)
+}
+
 fn insert_rows_with_field_mapping(
     engine: &Engine,
     table_specifier: &TableSpecifier,
@@ -135,7 +153,7 @@ fn insert_rows_with_field_mapping(
     values: &[Command],
 ) -> CommandResult<Command> {
     let fields_count = field_names.len();
-    let mut to_insert: HashMap<String, Vec<String>> = HashMap::with_capacity(fields_count);
+    let mut to_insert: HashMap<String, Vec<u8>> = HashMap::with_capacity(fields_count);
 
     // Create a mapping from field names to their types
     let field_type_map: HashMap<String, FieldType> = table_fields
@@ -153,34 +171,21 @@ fn insert_rows_with_field_mapping(
     }
 
     for chunk in values.chunks(fields_count) {
-        for (i, val) in chunk.iter().enumerate() {
+        for (i, command) in chunk.iter().enumerate() {
             let field_name = &field_names[i];
             let field_type = &field_type_map[field_name];
 
-            if &FieldType::get_field_type_from_command(val) != field_type {
+            if &FieldType::get_field_type_from_command(command) != field_type {
                 return Err(CommandError::ExecutionError(format!(
                     "Wrong field type for field '{}'. Expected: {:?}, received: {:?}",
-                    field_name, field_type, val
+                    field_name, field_type, command
                 )));
             }
-
-            let value_to_insert = match (val, field_type) {
-                (Command::String(s), FieldType::String) => s.clone(),
-                (Command::Array(arr), FieldType::Array) => {
-                    format!("{:?}", arr)
-                }
-                _ => {
-                    return Err(CommandError::ExecutionError(format!(
-                        "Internal error: type validation passed but extraction failed for field '{}'",
-                        field_name
-                    )));
-                }
-            };
 
             to_insert
                 .entry(field_name.clone())
                 .or_default()
-                .push(value_to_insert);
+                .extend(command_to_bytes_rmp_crc(command)?);
         }
     }
 
@@ -199,11 +204,12 @@ fn insert_rows_with_field_mapping(
             })?;
 
         let file_name = format!("{}.{}", field_name, field_type.to_str());
+
         let mut file = OpenOptions::new()
             .append(true)
             .open(path.join(&file_name))?;
 
-        file.write_all((values.join("\n") + "\n").as_bytes())?;
+        file.write_all(&values)?;
     }
 
     Ok(Command::String(String::from("OK")))
@@ -276,11 +282,24 @@ mod tests {
         let name_file = table_path.join("name.String");
         let age_file = table_path.join("age.String");
 
-        let name_content = std::fs::read_to_string(&name_file).unwrap();
-        assert_eq!(name_content, "John\nJane\nBob\n");
+        let mut name_expected: Vec<u8> = Vec::new();
+        name_expected
+            .extend(command_to_bytes_rmp_crc(&Command::String("John".to_string())).unwrap());
+        name_expected
+            .extend(command_to_bytes_rmp_crc(&Command::String("Jane".to_string())).unwrap());
+        name_expected
+            .extend(command_to_bytes_rmp_crc(&Command::String("Bob".to_string())).unwrap());
 
-        let age_content = std::fs::read_to_string(&age_file).unwrap();
-        assert_eq!(age_content, "25\n30\n35\n");
+        let name_content = std::fs::read(&name_file).unwrap();
+        assert_eq!(name_content, name_expected);
+
+        let mut age_expected: Vec<u8> = Vec::new();
+        age_expected.extend(command_to_bytes_rmp_crc(&Command::String("25".to_string())).unwrap());
+        age_expected.extend(command_to_bytes_rmp_crc(&Command::String("30".to_string())).unwrap());
+        age_expected.extend(command_to_bytes_rmp_crc(&Command::String("35".to_string())).unwrap());
+
+        let age_content = std::fs::read(&age_file).unwrap();
+        assert_eq!(age_content, age_expected);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }

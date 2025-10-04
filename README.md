@@ -96,6 +96,3 @@ For more in-depth description read `cargo doc --open`.
 
 ## License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-**Fun Fact**: Named after the famous Scottish TouchHouse, which during some time had an owner full in debts (which will happen to you if you decide to run it in production without proper backup strategies)
