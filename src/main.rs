@@ -2,6 +2,7 @@ mod commands;
 mod config;
 mod engine;
 mod protocol;
+mod storage;
 
 use crate::config::{Config, write_error_and_exit};
 use crate::engine::Engine;

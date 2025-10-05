@@ -1,7 +1,8 @@
 use crate::commands::DatabaseCommand;
 use crate::engine::{Engine, FieldType, TableSpecifier};
 use crate::protocol::{Command, CommandError, CommandResult};
-
+use crate::storage::{ColumnHeader, TableMetadata};
+use std::fs::File;
 use std::path::{Path, PathBuf};
 
 /// Command for creating databases and tables.
@@ -215,17 +216,33 @@ fn parse_fields(args: &[Command]) -> CommandResult<Vec<(String, FieldType)>> {
 }
 
 fn create_field_files(table_path: &Path, fields: &[(String, FieldType)]) -> CommandResult<()> {
+    // Create .metadata file
+    let metadata = TableMetadata::new(fields.to_vec());
+    let metadata_path = table_path.join(".metadata");
+    let mut metadata_file = File::create(&metadata_path).map_err(|e| {
+        CommandError::ExecutionError(format!(
+            "Failed to create metadata file '{}': {}",
+            metadata_path.display(),
+            e
+        ))
+    })?;
+    metadata.write(&mut metadata_file)?;
+
+    // Create column files
     for (field_name, field_type) in fields {
         let field_type_str = field_type.to_str();
-        let file_path = table_path.join(format!("{field_name}.{field_type_str}"));
+        let file_path = table_path.join(format!("{field_name}.{field_type_str}.col"));
 
-        std::fs::File::create(&file_path).map_err(|e| {
+        let mut file = File::create(&file_path).map_err(|e| {
             CommandError::ExecutionError(format!(
                 "Failed to create field file '{}': {}",
                 file_path.display(),
                 e
             ))
         })?;
+
+        let header = ColumnHeader::new(field_type.clone());
+        header.write(&mut file)?;
     }
 
     Ok(())
@@ -298,9 +315,40 @@ mod tests {
         assert!(table_path.exists());
         assert!(table_path.is_dir());
 
-        // Check field files were created
-        assert!(table_path.join("name.String").exists());
-        assert!(table_path.join("job.String").exists());
+        // check metadata
+        let metadata_path = table_path.join(".metadata");
+        assert!(metadata_path.exists());
+        assert!(metadata_path.is_file());
+
+        let table_metadata = TableMetadata::new(vec![
+            (String::from("name"), FieldType::String),
+            (String::from("job"), FieldType::String),
+        ]);
+        assert_eq!(
+            TableMetadata::read(&mut File::open(metadata_path).unwrap()).unwrap(),
+            table_metadata
+        );
+
+        // check field `name`
+        let name_field_path = table_path.join("name.String.col");
+        assert!(name_field_path.exists());
+        assert!(name_field_path.is_file());
+
+        let string_header = ColumnHeader::new(FieldType::String);
+        assert_eq!(
+            ColumnHeader::read(&mut File::open(name_field_path).unwrap()).unwrap(),
+            string_header
+        );
+
+        // check field `job`
+        let job_field_path = table_path.join("job.String.col");
+        assert!(job_field_path.exists());
+        assert!(job_field_path.is_file());
+
+        assert_eq!(
+            ColumnHeader::read(&mut File::open(job_field_path).unwrap()).unwrap(),
+            string_header
+        );
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }

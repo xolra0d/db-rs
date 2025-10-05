@@ -1,8 +1,11 @@
 use crate::commands;
 use crate::protocol::{Command, CommandError, CommandResult};
+use crate::storage::TableMetadata;
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt::Debug;
+use std::fs::File;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
@@ -130,45 +133,24 @@ impl Engine {
         table_specifier: &TableSpecifier,
     ) -> CommandResult<Vec<(String, FieldType)>> {
         let path = self.get_db_dir().join(PathBuf::from(table_specifier));
-        let dir = std::fs::read_dir(&path)?;
+        let metadata_path = path.join(".metadata");
 
-        let mut fields = Vec::new();
+        let mut file = File::open(&metadata_path).map_err(|e| {
+            CommandError::ExecutionError(format!(
+                "Failed to open metadata file '{}': {}",
+                metadata_path.display(),
+                e
+            ))
+        })?;
 
-        for entry in dir {
-            let entry = entry?.path();
+        let metadata = TableMetadata::read(&mut file)?;
 
-            let Some(field_name_with_ext) = entry.file_name().and_then(|x| x.to_str()) else {
-                return Err(CommandError::ExecutionError(
-                    "Field does not have a name!".into(),
-                ));
-            };
-
-            let Some(field_type) = entry.extension().and_then(|x| x.to_str()) else {
-                return Err(CommandError::ExecutionError(format!(
-                    "Field: {field_name_with_ext} does not have an extension!"
-                )));
-            };
-
-            let Some(field_type) = FieldType::parse_field_type_from_str(field_type) else {
-                return Err(CommandError::ExecutionError(format!(
-                    "Unknown field type: {field_type}, for field: {field_name_with_ext}"
-                )));
-            };
-
-            // Extract field name without extension
-            let field_name = entry
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .ok_or_else(|| {
-                    CommandError::ExecutionError(format!(
-                        "Invalid field name: {field_name_with_ext}"
-                    ))
-                })?;
-
-            fields.push((field_name.to_string(), field_type));
-        }
-
-        Ok(fields)
+        Ok(metadata
+            .schema
+            .columns
+            .into_iter()
+            .map(|col| (col.name, col.field_type))
+            .collect())
     }
 
     pub fn lock_table(&self, table_specifier: TableSpecifier) -> CommandResult<()> {
@@ -195,7 +177,7 @@ impl Engine {
 }
 
 /// Denotes Allowed field types in table.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FieldType {
     String,
     Array,
