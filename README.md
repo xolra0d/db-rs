@@ -2,10 +2,6 @@
 ---
 # TouchHouse - Blazingly Fast Column-Oriented Database
 ___
-## Features
-- **Message Pack over TCP**: Efficient binary serialization format
-- **Concurrent Connections**: Handle multiple client connections simultaneously
-___
 ## Modules
 - `src/main.rs` - Server entry point and connection handling
 - `src/engines/` - Database engines implementations
@@ -60,17 +56,17 @@ ___
 - **[`sqlparser`](sqhttps://docs.rs/sqlparser/)** - Apache Datafusion SQL to AST parser
 
 ## Data types
-- **String**
-- **Uuid**
-- **Bool**
-- **Int8**
-- **Int16**
-- **Int32**
-- **Int64**
-- **UInt8**
-- **UInt16**
-- **UInt32**
-- **UInt64**
+- String
+- Uuid
+- Bool
+- Int8
+- Int16
+- Int32
+- Int64
+- UInt8
+- UInt16
+- UInt32
+- UInt64
 
 
 ## Docs
