@@ -1,23 +1,16 @@
 !!UNDER DEVELOPMENT!!
 ---
-# TouchHouse - Blazingly Fast Column-Oriented Database (Rust)
-___
-**Lightweight Rust-based database server**, which provides a simple protocol for database operations over TCP.
+# TouchHouse - Blazingly Fast Column-Oriented Database
 ___
 ## Features
-- **Database Management**: Create and manage multiple databases with simple commands
 - **Message Pack over TCP**: Efficient binary serialization format
 - **Concurrent Connections**: Handle multiple client connections simultaneously
 ___
-## Available Commands
-- **`help`** - Shows all available commands
-- **`help <command_name>`** - Shows description for specific command
-___
 ## Modules
 - `src/main.rs` - Server entry point and connection handling
-- `src/engine.rs` - Core database engine and command execution
-- `src/commands/` - command system (echo, help...)
-- `src/protocol/` - Custom binary protocol implementation
+- `src/engines/` - Database engines implementations
+- `src/sql/` - Sql parsing and execution
+- `src/storage/` - Storage specific implementations
 - `src/config.rs` - Configuration management with environment variables
 ___
 ## Installation & Usage
@@ -38,45 +31,21 @@ ___
    ```
    The server will start on `127.0.0.1:7070` by default.
 
-### Configuration
-Set environment variables to customize the server:
-
-```bash
-# Server configuration
-export HOST=127.0.0.1        # Default: 127.0.0.1
-export PORT=7070             # Default: 7070
-
-# Database location  
-export DB_DIR=db_files       # Default: db_files
-
-# Logging configuration
-export LOG_LEVEL=1           # 1=Info, 2=Warn, 3=Error (Default: 1)
-```
-
 ### Example Usage
-```bash
-HOST=0.0.0.0 PORT=8080 DB_DIR=/var/lib/touchhouse cargo run
-```
 
 ### Client Connection
 
 ```bash
-python3 client.py
+python3 client.py HOST PORT
 ```
 
 ### Example Database Operations
 ```bash
-# List available commands
-help
-
-# Get help for specific command
-help create
-
 # Create a database
-create database mydb
+CREATE DATABASE mydb;
 
-# Create a table with fields
-create table mydb users name String email String
+# Create a table
+CREATE TABLE my_db.users (id UUID, name String, age UInt8) ENGINE=MergeTree ORDER BY (name, age)
 ```
 ___
 ## Tech Stack
@@ -86,11 +55,22 @@ ___
 - **[`env_logger`](https://docs.rs/env_logger/)** - Logging implementation
 - **[`tokio_util`](https://docs.rs/tokio-util/)** - Tokio utilities and codecs
 - **[`serde`](https://docs.rs/serde/)** - Serializing and deserializing framework
-- **[`rmp_serde`](https://docs.rs/rmp-serde/)** - Rust MessagePack library with serde
+- **[`rmp_serde`](https://docs.rs/rmp-serde/)** - Rust MessagePack library
+- **[`bincode`](https://docs.rs/bincode/)** - Fast serializing/deserializing protocol
+- **[`sqlparser`](sqhttps://docs.rs/sqlparser/)** - Apache Datafusion SQL to AST parser
 
-## Allowed data types
-- **Array**: `Command::Array(sequence)`
-- **String**: `Command::String(your_string)`
+## Data types
+- **String**
+- **Uuid**
+- **Bool**
+- **Int8**
+- **Int16**
+- **Int32**
+- **Int64**
+- **UInt8**
+- **UInt16**
+- **UInt32**
+- **UInt64**
 
 
 ## Docs

@@ -1,107 +1,90 @@
-mod commands;
 mod config;
-mod engine;
-mod protocol;
+mod engines;
+mod error;
+mod sql;
 mod storage;
+pub mod tcp_io_parser;
 
-use crate::config::{Config, write_error_and_exit};
-use crate::engine::Engine;
-use crate::protocol::protocol_parser::{Protocol, SendError};
-
-use crate::protocol::CommandError;
-use futures::{SinkExt, StreamExt};
-use log::{error, info, warn};
+use futures::{SinkExt as _, StreamExt as _};
+use log::{error, info};
+use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
-use tokio_util::codec::Decoder;
+use tokio::sync::Semaphore;
+use tokio_util::codec::Decoder as _;
+
+use crate::config::CONFIG;
+use crate::error::{Error, Result};
+use crate::sql::CommandRunner;
+use crate::tcp_io_parser::Parser;
 
 #[tokio::main]
 async fn main() {
-    env_logger::init();
+    env_logger::Builder::from_default_env()
+        .filter_level(CONFIG.get_log_level())
+        .init();
 
-    let config = Config::build();
-    let engine = Engine::new(config.get_db_dir().clone());
+    let max_conn = Arc::new(Semaphore::new(CONFIG.get_max_connections()));
 
-    let listener = TcpListener::bind(&config.get_socket_addr())
+    let listener = TcpListener::bind(&CONFIG.get_tcp_socket_addr())
         .await
-        .unwrap_or_else(|e| {
-            write_error_and_exit(format!(
+        .unwrap_or_else(|error| {
+            panic!(
                 "Failed to bind to {}: {}.",
-                config.get_socket_addr(),
-                e
-            ))
+                CONFIG.get_tcp_socket_addr(),
+                error
+            )
         });
 
-    info!("Database server listening on {}", config.get_socket_addr());
-    info!("Database directory: {}", config.get_db_dir().display());
-    info!("Log level: {:?}", config.get_log_level());
-
-    // TODO: check that all commands complete before exiting, if they do not trigger other tables...
+    info!(
+        "Database server listening on {}",
+        CONFIG.get_tcp_socket_addr()
+    );
+    info!("Database directory: {}", CONFIG.get_db_dir().display());
+    info!("Log level: {:?}", CONFIG.get_log_level());
 
     loop {
-        if engine.is_poisoned() {
-            info!("Engine is poisoned, stopping server...");
+        let Ok(connection_permit) = Arc::clone(&max_conn).acquire_owned().await else {
+            // semaphore is closed? currently unimplemented
             break;
-        }
-
+        };
         match listener.accept().await {
-            Ok((socket, addr)) => {
-                if engine.is_poisoned() {
-                    info!("Engine is poisoned, stopping server...");
-                    drop(socket);
-                    continue;
-                }
-
-                info!("New connection from {addr}");
-                let engine_ = engine.clone();
-
+            Ok((mut socket, addr)) => {
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(socket, engine_).await {
-                        error!("Error handling connection from {addr}: {e}");
+                    if handle_connection(&mut socket).await.is_err() {
+                        error!("Could not send to {addr}. Closing connection.");
                     }
+                    drop(socket);
+                    drop(connection_permit);
                 });
             }
-            Err(e) => error!("Failed to accept connection: {e}"),
+            Err(error) => error!("Failed to accept connection: {error}"),
         }
     }
 }
 
-/// Handles each connection by providing new Engine (look [`engine::Engine::clone`]).
-async fn handle_connection(
-    socket: TcpStream,
-    engine: Engine,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut transport = Protocol.framed(socket);
+async fn handle_connection(socket: &mut TcpStream) -> Result<()> {
+    let mut transport = Parser.framed(socket);
 
-    while let Some(command_result) = transport.next().await {
-        if engine.is_poisoned() {
-            info!("Engine is now poisoned, closing connection.");
-            let _ = transport.send(Err(CommandError::Poisoned)).await;
+    while let Some(sql_command) = transport.next().await {
+        let Ok(value) = sql_command else {
+            let error = sql_command.unwrap_err();
+            if let Err(send_error) = transport.send(Err(error)).await {
+                error!("Failed to send response: {send_error}");
+                return Err(Error::SendResponse);
+            }
+            continue;
+        };
+
+        if value == "exit" {
             break;
         }
 
-        match command_result {
-            Err(error) => {
-                warn!("Protocol error: {error:?}");
-                let _ = transport.send(Err(error)).await;
-            }
-            Ok(command) => {
-                let response = engine.execute_command(command).await;
-
-                if let Err(CommandError::Poisoned) = &response {
-                    info!("Engine is now poisoned, closing connection.");
-                    let _ = transport.send(Err(CommandError::Poisoned)).await;
-                    break;
-                }
-
-                if let Err(send_error) = transport.send(response).await {
-                    let SendError::IOError(error) = send_error;
-                    error!("Failed to send response: {error:?}");
-                    break;
-                }
-            }
+        let output = CommandRunner::execute_command(&value);
+        if let Err(send_error) = transport.send(output).await {
+            error!("Failed to send response: {send_error}");
+            return Err(Error::SendResponse);
         }
     }
-
     info!("Connection closed.");
     Ok(())
 }

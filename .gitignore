@@ -1,2 +1,4 @@
 .idea/
 target/
+clients/.venv/
+db_files/

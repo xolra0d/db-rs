@@ -1,108 +1,93 @@
-use log::{self, error};
-use std::fmt::Display;
+use serde::Deserialize;
 use std::io::ErrorKind;
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::SocketAddrV4;
 use std::path::PathBuf;
-use std::str::FromStr;
 
-/// Represents current database configuration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Deserialize)]
 pub struct Config {
-    /// Socket address for server to run. Set by `HOST` and `PORT` environment variables. Default `HOST` value: 127.0.0.1. Default `PORT` value: 7070.
-    socket_addr: SocketAddrV4,
-    /// Directory for storing databases. Set by `DB_DIR` environment variables. Default `DB_DIR` value: `db_files`.
-    db_dir: PathBuf,
-    /// Logging level. Set by `LOG_LEVEL` environment variable.
+    tcp_socket: SocketAddrV4,
+    storage_directory: PathBuf,
+    /// Logging level.
     /// ### Allowed values:
     /// - 1 => Info
     /// - 2 => Warn
     /// - 3 => Error
-    log_level: log::Level,
-}
-
-/// Writes `msg` error and exits
-pub fn write_error_and_exit(msg: impl Display) -> ! {
-    error!("Fatal error: {msg}");
-    std::process::exit(1);
+    log_level: usize,
+    /// Max concurrent connections.
+    max_connections: usize,
 }
 
 impl Config {
-    /// Get socket address from configuration
-    pub const fn get_socket_addr(&self) -> SocketAddrV4 {
-        self.socket_addr
+    /// Get TCP socket address from configuration
+    pub const fn get_tcp_socket_addr(&self) -> SocketAddrV4 {
+        self.tcp_socket
     }
 
     /// Get database directory from configuration
     pub const fn get_db_dir(&self) -> &PathBuf {
-        &self.db_dir
+        &self.storage_directory
     }
 
     /// Get logging level from configuration
-    pub const fn get_log_level(&self) -> log::Level {
-        self.log_level
+    pub const fn get_log_level(&self) -> log::LevelFilter {
+        match &self.log_level {
+            2 => log::LevelFilter::Warn,
+            3 => log::LevelFilter::Error,
+            _ => log::LevelFilter::Info,
+        }
     }
 
-    /// Retrieves environment variable `key`. If not defined returns `default`
-    fn get_env_or_default(key: &str, default: &str) -> String {
-        std::env::var(key).unwrap_or_else(|_| default.to_string())
+    /// Get max connections from configuration
+    pub const fn get_max_connections(&self) -> usize {
+        self.max_connections
     }
 
     /// Ensures that directory exists and is indeed directory. Creates one, if not exists
+    ///
+    /// # Panics:
+    ///
+    /// 1. When Permission denied to create a directory
+    /// 2. When supplied invalid name
+    /// 3. Any `std::fs::create_dir_all()` error
+    /// 4. When path already exists, but is not a directory
     fn ensure_directory_exists(dir: &PathBuf) {
         std::fs::create_dir_all(dir).unwrap_or_else(|e| match e.kind() {
             ErrorKind::PermissionDenied => {
-                write_error_and_exit("Permission denied to create database")
+                panic!("Permission denied to create database")
             }
-            ErrorKind::InvalidInput => write_error_and_exit("Invalid database name"),
-            _ => (),
+            ErrorKind::InvalidInput => panic!("Invalid database name"),
+            e => panic!("Invalid directory: {e:?}"),
         });
 
-        std::fs::exists(dir).unwrap_or_else(|_| {
-            write_error_and_exit("Can't check existence of database directory")
-        });
+        std::fs::exists(dir)
+            .unwrap_or_else(|_| panic!("Can't check existence of database directory"));
 
-        if !dir.is_dir() {
-            write_error_and_exit(format!(
-                "Database path {} exists but is not a directory.",
-                dir.display()
-            ));
-        }
-    }
-
-    /// Parses log level from string variable
-    fn parse_log_level(level_str: &str) -> log::Level {
-        match level_str {
-            "1" => log::Level::Info,
-            "2" => log::Level::Warn,
-            "3" => log::Level::Error,
-            _ => write_error_and_exit(format!(
-                "Invalid LOG_LEVEL '{level_str}'. Valid values: 1 (INFO), 2 (WARN), 3 (ERROR)",
-            )),
-        }
+        assert!(
+            dir.is_dir(),
+            "Database path {} exists but is not a directory.",
+            dir.display()
+        );
     }
 
     /// Builds a configuration from environment variables.
+    ///
+    /// # Panics:
+    ///
+    /// 1. When `CONFIG_PATH` env var is not set
+    /// 2. When `CONFIG_PATH` env var is invalid UTF-8
+    /// 2. When config file does not exist
+    /// 2. When config file is invalid toml
     pub fn build() -> Self {
-        let host = Self::get_env_or_default("HOST", "127.0.0.1");
-        let port = Self::get_env_or_default("PORT", "7070");
+        let config_path =
+            std::env::var("CONFIG_PATH").unwrap_or_else(|_| "touch_config.toml".to_string());
 
-        let ip_addr = SocketAddrV4::new(
-            Ipv4Addr::from_str(&host)
-                .unwrap_or_else(|e| write_error_and_exit(format!("Invalid HOST '{host}': {e}."))),
-            u16::from_str(&port)
-                .unwrap_or_else(|e| write_error_and_exit(format!("Invalid PORT '{port}': {e}."))),
-        );
+        let config_file = std::fs::read_to_string(config_path).expect("Couldn't read config file");
+        let raw_config: Self = toml::from_str(config_file.as_str()).expect("Invalid config file");
 
-        let db_dir = PathBuf::from(Self::get_env_or_default("DB_DIR", "db_files"));
-        Self::ensure_directory_exists(&db_dir);
+        Self::ensure_directory_exists(&raw_config.storage_directory);
 
-        let log_level_str = Self::get_env_or_default("LOG_LEVEL", "1");
-        let log_level = Self::parse_log_level(&log_level_str);
-
-        Self {
-            socket_addr: ip_addr,
-            db_dir,
-            log_level,
-        }
+        raw_config
     }
 }
+
+pub static CONFIG: std::sync::LazyLock<Config> = std::sync::LazyLock::new(Config::build);

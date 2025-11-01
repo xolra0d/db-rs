@@ -1,0 +1,10 @@
+# Main database config
+storage_directory = "db_files/"
+tcp_socket = "127.0.0.1:7070"
+max_connections = 4096
+
+# Allowed values:
+# - 1 => Info
+# - 2 => Warn
+# - 3 => Error
+log_level = 1
