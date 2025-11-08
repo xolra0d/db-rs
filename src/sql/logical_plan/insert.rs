@@ -44,6 +44,7 @@ impl LogicalPlan {
         }
 
         let mut insert_columns = Vec::with_capacity(insert.columns.len());
+        let mut insert_column_set = std::collections::HashSet::new();
         for input_column in &insert.columns {
             let column_def = table_config
                 .metadata
@@ -52,7 +53,8 @@ impl LogicalPlan {
                 .iter()
                 .find(|x| x.name == input_column.value)
                 .ok_or(Error::InvalidColumnName(input_column.value.clone()))?;
-            insert_columns.push(column_def.clone())
+            insert_columns.push(column_def.clone());
+            insert_column_set.insert(&column_def.name);
         }
 
         let missing_not_null = table_config
@@ -60,7 +62,7 @@ impl LogicalPlan {
             .schema
             .columns
             .iter()
-            .filter(|col| !insert_columns.contains(col))
+            .filter(|col| !insert_column_set.contains(&col.name))
             .any(|col| {
                 col.constraints
                     .iter()
@@ -72,7 +74,7 @@ impl LogicalPlan {
         }
 
         for order_col in &table_config.metadata.schema.order_by {
-            if !insert_columns.iter().any(|c| c == order_col) {
+            if !insert_column_set.contains(&order_col.name) {
                 return Err(Error::InvalidColumnsSpecified);
             }
         }
