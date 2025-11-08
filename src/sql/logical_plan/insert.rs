@@ -1,5 +1,5 @@
 use scc::Guard;
-use sqlparser::ast::{Expr, Insert, SetExpr, TableObject};
+use sqlparser::ast::{Expr, Insert, SetExpr, TableObject, UnaryOperator, Value as SQLValue};
 
 use crate::error::{Error, Result};
 use crate::runtime_config::TABLE_DATA;
@@ -96,13 +96,31 @@ impl LogicalPlan {
             return Err(Error::InvalidSource);
         }
 
+        println!("SOURCE: {:#?}", &source.rows);
+
         for row in &source.rows {
             for (col_idx, expr) in row.iter().enumerate() {
-                let Expr::Value(sql_value) = expr else {
-                    return Err(Error::InvalidSource);
+                let sql_value = match expr {
+                    Expr::Value(sql_value) => sql_value.value.clone(),
+                    Expr::UnaryOp { op, expr } => {
+                        let Expr::Value(inner) = expr.as_ref() else {
+                            return Err(Error::InvalidSource);
+                        };
+                        match (&op, &inner.value) {
+                            (UnaryOperator::Minus, SQLValue::Number(n, exact)) => {
+                                SQLValue::Number(format!("-{n}"), *exact)
+                            }
+                            (UnaryOperator::Plus, SQLValue::Number(n, exact)) => {
+                                SQLValue::Number(n.clone(), *exact)
+                            }
+                            _ => return Err(Error::InvalidSource),
+                        }
+                    }
+                    _ => return Err(Error::InvalidSource),
                 };
+
                 let column_type = &columns[col_idx].column_def.field_type;
-                let value = Value::try_from((sql_value.value.clone(), column_type))?;
+                let value = Value::try_from((sql_value, column_type))?;
                 columns[col_idx].data.push(value);
             }
         }

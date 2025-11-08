@@ -36,8 +36,13 @@ impl CommandRunner {
                 })?;
 
                 if let Err(e) = table_metadata.write_to(&table_def) {
-                    // Remove directory if metadata write fails
-                    let _ = std::fs::remove_dir_all(table_def.get_path());
+                    if let Err(cleanup_err) = std::fs::remove_dir_all(table_def.get_path()) {
+                        // Log cleanup failure but still return the original error
+                        log::error!(
+                            "Warning: Failed to cleanup directory after metadata write failure: {}",
+                            cleanup_err
+                        );
+                    }
                     return Err(e);
                 }
 

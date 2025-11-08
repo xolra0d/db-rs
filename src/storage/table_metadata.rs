@@ -57,7 +57,8 @@ impl TableMetadata {
             _ => Error::InvalidTable,
         })?;
 
-        if file_bytes.len() <= MAGIC_BYTES.len() {
+        let min_len = MAGIC_BYTES.len() + 4;
+        if file_bytes.len() <= min_len {
             return Err(Error::InvalidTable);
         }
 

@@ -55,6 +55,12 @@ pub enum Error {
     EmptySource,
     #[display("Table entry already exists")]
     TableEntryAlreadyExists,
+    #[display("Permission denied")]
+    PermissionDenied,
+
+    // mod engines
+    #[display("No ORDER BY columns found")]
+    OrderByColumnsNotFound,
 
     // mod main
     SendResponse, // does not need display

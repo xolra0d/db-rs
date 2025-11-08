@@ -9,8 +9,10 @@ pub use command_runner::CommandRunner;
 /// Returns true if `name` consists of english alphabet, numbers and underscore
 /// Otherwise returns false
 pub fn validate_name(name: &str) -> bool {
-    name.chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
 #[cfg(test)]
@@ -22,6 +24,7 @@ pub mod tests {
         assert!(!validate_name("*"));
         assert!(!validate_name("csji="));
         assert!(!validate_name("csji122yrd01/"));
+        assert!(!validate_name(""));
     }
 
     #[test]

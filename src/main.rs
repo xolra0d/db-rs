@@ -24,9 +24,8 @@ async fn main() {
         .filter_level(CONFIG.get_log_level())
         .init();
 
-    if let Err(e) = storage::load_all_parts_on_startup(CONFIG.get_db_dir()) {
-        error!("Failed to load parts on startup: {:?}", e);
-    }
+    storage::load_all_parts_on_startup(CONFIG.get_db_dir())
+        .unwrap_or_else(|e| panic!("Failed to load parts on startup: {:?}", e));
 
     let max_conn = Arc::new(Semaphore::new(CONFIG.get_max_connections()));
 

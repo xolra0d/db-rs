@@ -31,7 +31,7 @@ impl CommandRunner {
 
         if let Err(cleanup_err) = table_part.remove_raw(&table_def) {
             // Log cleanup failure, but don't override original error
-            log::error!("Warning: Failed to clean up raw data: {}", cleanup_err);
+            log::warn!("Failed to clean up raw data: {}", cleanup_err);
         }
 
         Err(Error::CouldNotInsertData(

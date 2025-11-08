@@ -286,7 +286,7 @@ pub fn load_all_parts_on_startup(db_dir: &Path) -> Result<()> {
                                     indexes: Vec::new(),
                                 });
 
-                        // `This is safe, because
+                        // This is safe, because
                         // we receive exclusive access to the entry (as uses `OccupiedEntry`),
                         // and no other thread can modify it.
                         unsafe {

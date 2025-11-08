@@ -129,9 +129,10 @@ impl LogicalPlan {
         options: Option<&OneOrManyWithParens<Expr>>,
         columns: &[&ColumnDef],
     ) -> Result<Vec<ColumnDef>> {
-        let order_by_params = *options.as_ref().ok_or(Error::InvalidOrderBy)?;
+        let order_by_params: &OneOrManyWithParens<Expr> =
+            *options.as_ref().ok_or(Error::InvalidOrderBy)?;
         if order_by_params.is_empty() {
-            return Err(Error::InvalidOrderBy);
+            return Err(Error::OrderByColumnsNotFound);
         }
 
         let mut order_by = Vec::with_capacity(order_by_params.len());

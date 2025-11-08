@@ -1,6 +1,6 @@
 use crate::engines::{Engine, EngineConfig};
 use crate::error::{Error, Result};
-use crate::storage::{Column, ColumnDef};
+use crate::storage::{Column, ColumnDef, Value};
 
 #[allow(dead_code)]
 pub struct MergeTreeEngine {
@@ -33,13 +33,19 @@ impl Engine for MergeTreeEngine {
             return Err(Error::InvalidColumnsSpecified);
         }
 
-        let order_by_indices: Vec<usize> = order_by
-            .iter()
-            .filter_map(|order_col| columns.iter().position(|col| col.column_def == *order_col))
-            .collect();
+        let mut order_by_indices = Vec::with_capacity(order_by.len());
+        for order_col in order_by {
+            let Some(idx) = columns
+                .iter()
+                .position(|col| col.column_def.name == order_col.name)
+            else {
+                return Err(Error::InvalidColumnsSpecified);
+            };
+            order_by_indices.push(idx);
+        }
 
         if order_by_indices.is_empty() {
-            return Err(Error::NoColumnsSpecified);
+            return Err(Error::OrderByColumnsNotFound);
         }
 
         let mut indices: Vec<usize> = (0..row_count).collect();
@@ -69,9 +75,7 @@ impl Engine for MergeTreeEngine {
     }
 }
 
-fn compare_values(a: &crate::storage::Value, b: &crate::storage::Value) -> std::cmp::Ordering {
-    use crate::storage::Value;
-
+fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
     match (a, b) {
         (Value::Int8(x), Value::Int8(y)) => x.cmp(y),
         (Value::Int16(x), Value::Int16(y)) => x.cmp(y),
@@ -85,8 +89,8 @@ fn compare_values(a: &crate::storage::Value, b: &crate::storage::Value) -> std::
         (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
         (Value::Uuid(x), Value::Uuid(y)) => x.cmp(y),
         (Value::Null, Value::Null) => std::cmp::Ordering::Equal,
-        (Value::Null, _) => std::cmp::Ordering::Less,
-        (_, Value::Null) => std::cmp::Ordering::Greater,
+        (Value::Null, _) => std::cmp::Ordering::Greater,
+        (_, Value::Null) => std::cmp::Ordering::Less,
         _ => std::cmp::Ordering::Equal,
     }
 }
