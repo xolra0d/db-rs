@@ -1,13 +1,36 @@
+use sqlparser::ast::{
+    ColumnOption, ColumnOptionDef, CreateTable, CreateTableOptions, Expr, OneOrManyWithParens,
+    SqlOption,
+};
+use std::collections::HashSet;
+
 use crate::engines::EngineName;
 use crate::error::{Error, Result};
 use crate::sql::sql_parser::LogicalPlan;
-use crate::storage::{ColumnDef, TableDef, ValueType};
-use sqlparser::ast::{CreateTable, CreateTableOptions, Expr, OneOrManyWithParens, SqlOption};
-use std::collections::HashSet;
+use crate::sql::validate_name;
+use crate::storage::{ColumnDef, ColumnDefConstraint, ColumnDefOption, TableDef, ValueType};
 
 impl LogicalPlan {
+    /// Create a table as directory and .metadata file.
+    ///
+    /// Returns
+    ///   * Ok when:
+    ///     1. Database name and table name (does not exist) provided, columns, their types and order by are valid: LogicalPlan::CreateTable
+    ///     2. Database name and table name (exists and `IF NOT EXISTS` specified) provided, columns, their types and order by are valid: LogicalPlan::Skip
+    ///   * Error when:
+    ///     1. Could not parse table and database names from query: UnsupportedCommand.
+    ///     2. Table already exists and `IF NOT EXISTS` is not passed: TableAlreadyExists.
+    ///     3. Any column name provided is invalid: InvalidColumnName.
+    ///     4. Any column name is repeated in specification: InvalidColumnName.
+    ///     5. Unsupported column type was provided: UnsupportedColumnType.
+    ///     6. `parse_column_constraints` returns error.
+    ///     7. `parse_order_by` returns error.
     pub fn from_create_table(create_table: &CreateTable) -> Result<Self> {
         let table_def = TableDef::try_from(&create_table.name)?;
+
+        if !validate_name(&table_def.table) {
+            return Err(Error::InvalidTableName);
+        }
 
         let table_exists = table_def.exists_or_err();
         if create_table.if_not_exists && table_exists.is_ok() {
@@ -24,7 +47,7 @@ impl LogicalPlan {
         for table_column in &create_table.columns {
             let column_name = &table_column.name.value;
 
-            if !Self::validate_name(column_name) {
+            if !validate_name(column_name) {
                 return Err(Error::InvalidColumnName(column_name.to_owned()));
             }
             if !columns_names.insert(column_name) {
@@ -33,9 +56,12 @@ impl LogicalPlan {
 
             let field_type = ValueType::try_from(&table_column.data_type)?;
 
+            let constraints = Self::parse_column_constraints(&table_column.options)?;
+
             columns.push(ColumnDef {
                 name: column_name.clone(),
                 field_type,
+                constraints,
             });
         }
 
@@ -54,13 +80,22 @@ impl LogicalPlan {
         })
     }
 
-    pub fn parse_engine_from_table_options(
-        table_options: &CreateTableOptions,
-    ) -> Result<EngineName> {
+    /// Tries to parse `EngineName` from create table tree.
+    ///
+    /// Returns:
+    ///   * Ok when:
+    ///     1. None is provided: EngineName::MergeTree.
+    ///     2. "Engine".lowercase() option is provided and name is valid: EngineName::{SPECIFIED_ENGINE_NAME}
+    ///   * Error when:
+    ///     1. More than 1 option is provided: InvalidEngineName
+    ///     2. When option name is not "Engine".lowercase(): InvalidEngineName
+    ///     3. When engine name is not valid, return error from `EngineName::try_from`
+    fn parse_engine_from_table_options(table_options: &CreateTableOptions) -> Result<EngineName> {
         match table_options {
             CreateTableOptions::None => Ok(EngineName::MergeTree),
             CreateTableOptions::Plain(options) => {
                 if options.len() != 1 {
+                    // todo: remove later when new options added
                     return Err(Error::InvalidEngineName);
                 }
 
@@ -79,13 +114,25 @@ impl LogicalPlan {
         }
     }
 
-    pub fn parse_order_by(
+    /// Tries to parse ORDER BY column names.
+    ///
+    /// Returns
+    ///   * Ok when:
+    ///     1. All columns are unique, exist in the pool of ALL columns: Vec<ColumnDef>
+    ///   * Error when:
+    ///     1. If no ORDER BY was provided: InvalidOrderBy.
+    ///     2. If ORDER BY is empty: InvalidOrderBy.
+    ///     3. If column name is not an identifier: InvalidOrderBy.
+    ///     4. If column, not found in all columns, is found in ORDER BY: InvalidOrderBy.
+    ///     5. If the same column is added: InvalidOrderBy.
+    fn parse_order_by(
         options: Option<&OneOrManyWithParens<Expr>>,
         columns: &[&ColumnDef],
     ) -> Result<Vec<ColumnDef>> {
-        let order_by_params = *options.as_ref().ok_or(Error::InvalidOrderBy)?;
+        let order_by_params: &OneOrManyWithParens<Expr> =
+            *options.as_ref().ok_or(Error::InvalidOrderBy)?;
         if order_by_params.is_empty() {
-            return Err(Error::InvalidOrderBy);
+            return Err(Error::OrderByColumnsNotFound);
         }
 
         let mut order_by = Vec::with_capacity(order_by_params.len());
@@ -109,5 +156,57 @@ impl LogicalPlan {
             order_by.push((*column_def).clone());
         }
         Ok(order_by)
+    }
+
+    /// Tries to parse column constraints for each column.
+    ///
+    /// Returns:
+    ///   * Ok when:
+    ///     1. When provided valid constraint(s): Vec<ColumnDefConstraint>
+    ///   * Error when:
+    ///     1. Both NULL and NOT NULL are supplied for the column: UnsupportedColumnConstraint
+    ///     2. Unsupported column constraint is provided: UnsupportedColumnConstraint
+    pub fn parse_column_constraints(
+        options: &[ColumnOptionDef],
+    ) -> Result<Vec<ColumnDefConstraint>> {
+        let mut result = Vec::with_capacity(options.len());
+        let mut null_found = false;
+
+        for option in options {
+            let option_type = match option.option {
+                ColumnOption::Null => {
+                    if null_found {
+                        return Err(Error::UnsupportedColumnConstraint(
+                            "Invalid NULL constraint".to_string(),
+                        ));
+                    }
+
+                    null_found = true;
+                    ColumnDefOption::Null
+                }
+                ColumnOption::NotNull => {
+                    if null_found {
+                        return Err(Error::UnsupportedColumnConstraint(
+                            "Invalid NULL constraint".to_string(),
+                        ));
+                    }
+
+                    null_found = true;
+                    ColumnDefOption::NotNull
+                }
+                _ => {
+                    return Err(Error::UnsupportedColumnConstraint(
+                        option.option.to_string(),
+                    ));
+                }
+            };
+
+            result.push(ColumnDefConstraint {
+                name: None,
+                option: option_type,
+            });
+        }
+
+        Ok(result)
     }
 }

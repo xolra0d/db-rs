@@ -1,5 +1,4 @@
-use crate::config::CONFIG;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::sql::sql_parser::{LogicalPlan, PhysicalPlan};
 use crate::storage::OutputTable;
 
@@ -8,6 +7,7 @@ use crate::storage::OutputTable;
 pub struct CommandRunner;
 
 impl CommandRunner {
+    /// Handles full command execution.
     pub fn execute_command(command: &str) -> Result<OutputTable> {
         let logical_plan = LogicalPlan::try_from(command)?;
 
@@ -18,6 +18,7 @@ impl CommandRunner {
         Self::execute_physical_plan(physical_plan)
     }
 
+    /// Execution of the physical plan.
     fn execute_physical_plan(plan: PhysicalPlan) -> Result<OutputTable> {
         match plan {
             PhysicalPlan::Skip => Ok(OutputTable::build_ok()),
@@ -27,14 +28,8 @@ impl CommandRunner {
                 columns,
                 engine,
                 order_by,
-            } => Self::create_table(&name, columns, engine, order_by),
+            } => Self::create_table(name, columns, engine, order_by),
+            PhysicalPlan::Insert { table_def, columns } => Self::insert(table_def, columns),
         }
-    }
-
-    fn create_database(name: String) -> Result<OutputTable> {
-        std::fs::create_dir(CONFIG.get_db_dir().join(name))
-            .map_err(|_| Error::InvalidDatabaseName)?;
-
-        Ok(OutputTable::build_ok())
     }
 }

@@ -1,7 +1,12 @@
+// Architectural design:
+//   * Using `Decoder` trait we decode SQL command into `String`
+//   * Using `Encoder` trait we encode Received Result<OutputTable, T: Display>
+//     Typically, generic T is `Error`, which then converted using `ToString` trait
+
 use derive_more::Display;
 use rmp_serde::encode::Error as RMPError;
 use serde::Serialize;
-use std::fmt::Display;
+use std::fmt;
 use tokio_util::bytes::{Buf, BufMut, BytesMut};
 use tokio_util::codec::{Decoder, Encoder};
 
@@ -10,10 +15,9 @@ use crate::storage::OutputTable;
 type HeaderType = u64;
 const HEADER_SIZE: usize = size_of::<HeaderType>();
 
+// Created for derive Display and IO error handling (required by `Encoder` and `Decoder` traits).
 #[derive(Debug, Serialize, Display)]
 pub enum ProtocolError {
-    #[display("SQL parsing error. Invalid value write: {_0}")]
-    InvalidValueWrite(String),
     #[display("SQL parsing error. Unknown length")]
     UnknownLength,
     #[display("SQL parsing error. Invalid data model: {_0}")]
@@ -29,6 +33,7 @@ pub enum ProtocolError {
     Conversion(String),
 }
 
+// Required by `Encoder` and `Decoder` traits.
 impl From<std::io::Error> for ProtocolError {
     fn from(error: std::io::Error) -> Self {
         Self::IOError(error.to_string())
@@ -85,7 +90,7 @@ impl Decoder for Parser {
 
 impl<T> Encoder<Result<OutputTable, T>> for Parser
 where
-    T: Display,
+    T: fmt::Display,
 {
     type Error = ProtocolError;
 

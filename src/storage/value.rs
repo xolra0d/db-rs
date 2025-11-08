@@ -1,11 +1,13 @@
-use crate::error::Error;
 use serde::{Deserialize, Serialize};
 use sqlparser::ast::{DataType as SQLDatatype, Value as SQLValue};
 use uuid::Uuid;
 
+use crate::error::Error;
+
 /// Represents a parsed value in our custom protocol
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Value {
+    Null,
     String(String),
     Uuid(Uuid),
     Bool(bool),
@@ -21,34 +23,17 @@ pub enum Value {
     UInt64(u64),
 }
 
-impl Value {
-    pub const fn get_type(&self) -> ValueType {
-        match self {
-            Self::String(_) => ValueType::String,
-            Self::Uuid(_) => ValueType::Uuid,
-            Self::Bool(_) => ValueType::Bool,
-            Self::Int8(_) => ValueType::Int8,
-            Self::Int16(_) => ValueType::Int16,
-            Self::Int32(_) => ValueType::Int32,
-            Self::Int64(_) => ValueType::Int64,
-            Self::UInt8(_) => ValueType::UInt8,
-            Self::UInt16(_) => ValueType::UInt16,
-            Self::UInt32(_) => ValueType::UInt32,
-            Self::UInt64(_) => ValueType::UInt64,
-        }
-    }
-}
-
-impl TryFrom<(SQLValue, ValueType)> for Value {
+impl TryFrom<(SQLValue, &ValueType)> for Value {
     type Error = Error;
-    fn try_from(value: (SQLValue, ValueType)) -> Result<Self, Self::Error> {
+    fn try_from(value: (SQLValue, &ValueType)) -> Result<Self, Self::Error> {
         let (sql_value, value_type) = value;
 
         match sql_value {
+            SQLValue::Null => Ok(Self::Null),
             SQLValue::SingleQuotedString(string)
             | SQLValue::TripleSingleQuotedString(string)
             | SQLValue::TripleDoubleQuotedString(string) => {
-                if value_type != ValueType::String {
+                if value_type != &ValueType::String {
                     return Err(Error::InvalidSource);
                 }
                 Ok(Self::String(string))
@@ -70,13 +55,13 @@ impl TryFrom<(SQLValue, ValueType)> for Value {
                 }
             }
             SQLValue::Boolean(bool_value) => {
-                if value_type != ValueType::Bool {
+                if value_type != &ValueType::Bool {
                     return Err(Error::InvalidSource);
                 }
                 Ok(Self::Bool(bool_value))
             }
-            SQLValue::Null | SQLValue::Placeholder(_) => Err(Error::UnsupportedColumnType(
-                "Plan to add Null and placeholder support".to_string(),
+            SQLValue::Placeholder(_) => Err(Error::UnsupportedColumnType(
+                "Plan to add placeholder support".to_string(),
             )),
             column_type => Err(Error::UnsupportedColumnType(column_type.to_string())),
         }
@@ -85,6 +70,7 @@ impl TryFrom<(SQLValue, ValueType)> for Value {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Hash, PartialEq, Eq)]
 pub enum ValueType {
+    Null,
     String,
     Uuid,
     Bool,

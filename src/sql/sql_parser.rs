@@ -1,24 +1,40 @@
-use crate::engines::EngineName;
-use crate::error::{Error, Result};
-use crate::storage::{ColumnDef, TableDef};
 use sqlparser::ast::Statement;
 use sqlparser::dialect::ClickHouseDialect;
 use sqlparser::parser::Parser;
 
-#[derive(Debug)]
+use crate::engines::EngineName;
+use crate::error::{Error, Result};
+use crate::storage::{Column, ColumnDef, TableDef};
+
+/// High level representation of the SQL query.
+#[derive(Debug, PartialEq)]
 pub enum LogicalPlan {
+    /// No tasks need to be done. Skip.
     Skip,
-    CreateDatabase {
-        name: String,
-    },
+
+    /// Create a database.
+    CreateDatabase { name: String },
+
+    /// Create a table.
     CreateTable {
         name: TableDef,
         columns: Vec<ColumnDef>,
         engine: EngineName,
         order_by: Vec<ColumnDef>,
     },
+
+    /// Insert values.
+    Insert {
+        table_def: TableDef,
+        columns: Vec<Column>,
+    },
 }
 
+/// Tries to convert SQL to LogicalPlan by using Datafusion SQLParser
+/// Currently supported commands
+///   1. `CREATE DATABASE`
+///   2. `CREATE TABLE`
+///   3. `INSERT INTO`
 impl TryFrom<&str> for LogicalPlan {
     type Error = Error;
 
@@ -35,33 +51,40 @@ impl TryFrom<&str> for LogicalPlan {
                 if_not_exists,
                 ..
             } => Self::from_create_database(db_name, *if_not_exists),
+            Statement::Insert(insert) => Self::from_insert(insert),
             _ => Err(Error::UnsupportedCommand(statement.to_string())),
         }
     }
 }
 
 impl LogicalPlan {
-    pub fn validate_name(name: &str) -> bool {
-        name.chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-    }
-
+    /// Plan optimization
     pub fn optimize_self(self) -> Self {
         self
     }
 }
 
+/// Lower level representation of the Logical Plan.
 #[derive(Debug)]
 pub enum PhysicalPlan {
+    /// No tasks need to be done. Skip.
     Skip,
-    CreateDatabase {
-        name: String,
-    },
+
+    /// Create a database.
+    CreateDatabase { name: String },
+
+    /// Create a table.
     CreateTable {
         name: TableDef,
         columns: Vec<ColumnDef>,
         engine: EngineName,
         order_by: Vec<ColumnDef>,
+    },
+
+    /// Insert values.
+    Insert {
+        table_def: TableDef,
+        columns: Vec<Column>,
     },
 }
 
@@ -81,6 +104,7 @@ impl From<LogicalPlan> for PhysicalPlan {
                 engine,
                 order_by,
             },
+            LogicalPlan::Insert { table_def, columns } => Self::Insert { table_def, columns },
         }
     }
 }

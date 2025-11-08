@@ -1,12 +1,22 @@
+use scc::hash_index::Entry;
+
 use crate::engines::EngineName;
 use crate::error::{Error, Result};
+use crate::runtime_config::{TABLE_DATA, TableConfig};
 use crate::sql::CommandRunner;
 use crate::storage::table_metadata::{TableMetadata, TableSchema};
 use crate::storage::{ColumnDef, OutputTable, TableDef};
 
 impl CommandRunner {
+    /// Creates a table with metadata and filesystem structures.
+    ///
+    /// Atomically reserves table entry in memory, creates directory, and writes metadata.
+    ///
+    /// Returns:
+    ///   * Ok: OutputTable with success status
+    ///   * Error: TableEntryAlreadyExists or CouldNotInsertData on failure
     pub fn create_table(
-        table_def: &TableDef,
+        table_def: TableDef,
         columns: Vec<ColumnDef>,
         engine: EngineName,
         order_by: Vec<ColumnDef>,
@@ -14,11 +24,34 @@ impl CommandRunner {
         let table_schema = TableSchema { columns, order_by };
         let table_metadata = TableMetadata::try_new(table_schema, engine)?;
 
-        // TODO: make atomic
+        match TABLE_DATA.entry_sync(table_def.clone()) {
+            Entry::Occupied(_) => {
+                // Table already exists
+                return Err(Error::TableEntryAlreadyExists);
+            }
+            Entry::Vacant(vacant_entry) => {
+                // Now we have exclusive access
+                std::fs::create_dir(table_def.get_path()).map_err(|e| {
+                    Error::CouldNotInsertData(format!("Failed to create table dir: {}", e))
+                })?;
 
-        std::fs::create_dir(table_def.get_path()).map_err(|_| Error::InvalidTable)?;
+                if let Err(e) = table_metadata.write_to(&table_def) {
+                    if let Err(cleanup_err) = std::fs::remove_dir_all(table_def.get_path()) {
+                        // Log cleanup failure but still return the original error
+                        log::error!(
+                            "Warning: Failed to cleanup directory after metadata write failure: {}",
+                            cleanup_err
+                        );
+                    }
+                    return Err(e);
+                }
 
-        table_metadata.write_to(table_def)?;
+                vacant_entry.insert_entry(TableConfig {
+                    metadata: table_metadata,
+                    indexes: Vec::new(),
+                });
+            }
+        }
 
         Ok(OutputTable::build_ok())
     }
