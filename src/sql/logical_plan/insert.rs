@@ -33,6 +33,16 @@ impl LogicalPlan {
         if insert.columns.is_empty() {
             return Err(Error::NoColumnsSpecified);
         }
+        let mut seen = std::collections::HashSet::new();
+        for col in &insert.columns {
+            if !seen.insert(&col.value) {
+                return Err(Error::InvalidColumnName(format!(
+                    "Duplicate column: {}",
+                    col.value
+                )));
+            }
+        }
+
         let mut insert_columns = Vec::with_capacity(insert.columns.len());
         for input_column in &insert.columns {
             let column_def = table_config
@@ -119,6 +129,21 @@ impl LogicalPlan {
 
                 let column_type = &columns[col_idx].column_def.field_type;
                 let value = Value::try_from((sql_value, column_type))?;
+
+                if value == Value::Null {
+                    let has_not_null = columns[col_idx]
+                        .column_def
+                        .constraints
+                        .iter()
+                        .any(|c| c.option == ColumnDefOption::NotNull);
+                    if has_not_null {
+                        return Err(Error::CouldNotInsertData(format!(
+                            "NULL value not allowed for column '{}'",
+                            columns[col_idx].column_def.name
+                        )));
+                    }
+                }
+
                 columns[col_idx].data.push(value);
             }
         }

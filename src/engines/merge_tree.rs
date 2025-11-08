@@ -44,10 +44,6 @@ impl Engine for MergeTreeEngine {
             order_by_indices.push(idx);
         }
 
-        if order_by_indices.is_empty() {
-            return Err(Error::OrderByColumnsNotFound);
-        }
-
         let mut indices: Vec<usize> = (0..row_count).collect();
 
         indices.sort_by(|&a, &b| {
