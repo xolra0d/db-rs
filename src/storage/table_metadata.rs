@@ -1,6 +1,6 @@
-use std::io::ErrorKind;
 use crc32fast;
 use serde::{Deserialize, Serialize};
+use std::io::ErrorKind;
 
 use crate::engines::EngineName;
 use crate::error::{Error, Result};
