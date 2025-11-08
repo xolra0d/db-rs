@@ -18,8 +18,6 @@ const HEADER_SIZE: usize = size_of::<HeaderType>();
 // Created for derive Display and IO error handling (required by `Encoder` and `Decoder` traits).
 #[derive(Debug, Serialize, Display)]
 pub enum ProtocolError {
-    // #[display("SQL parsing error. Invalid value write: {_0}")]
-    // InvalidValueWrite(String),
     #[display("SQL parsing error. Unknown length")]
     UnknownLength,
     #[display("SQL parsing error. Invalid data model: {_0}")]

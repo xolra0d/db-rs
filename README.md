@@ -42,6 +42,9 @@ CREATE DATABASE mydb;
 
 # Create a table
 CREATE TABLE my_db.users (id UUID, name String, age UInt8) ENGINE=MergeTree ORDER BY (name, age)
+
+# Insert data
+INSERT INTO my_db.users (id, name, age) VALUES ('123e4567-e89b-12d3-a456-426614174000', 'Alice', 30)
 ```
 ___
 ## Tech Stack

@@ -96,8 +96,6 @@ impl LogicalPlan {
             return Err(Error::InvalidSource);
         }
 
-        println!("SOURCE: {:#?}", &source.rows);
-
         for row in &source.rows {
             for (col_idx, expr) in row.iter().enumerate() {
                 let sql_value = match expr {
