@@ -1,0 +1,44 @@
+impl Value {
+    pub const fn get_type(&self) -> ValueType {
+        match self {
+            Self::String(_) => ValueType::String,
+            Self::Uuid(_) => ValueType::Uuid,
+            Self::Bool(_) => ValueType::Bool,
+            Self::Int8(_) => ValueType::Int8,
+            Self::Int16(_) => ValueType::Int16,
+            Self::Int32(_) => ValueType::Int32,
+            Self::Int64(_) => ValueType::Int64,
+            Self::UInt8(_) => ValueType::UInt8,
+            Self::UInt16(_) => ValueType::UInt16,
+            Self::UInt32(_) => ValueType::UInt32,
+            Self::UInt64(_) => ValueType::UInt64,
+            Self::Null => ValueType::Null,
+        }
+    }
+}
+
+/// peek
+This method is safe to use if the value is not modified or if V is a pointer type such as Box<T> or Arc<T>. However, it is unsafe if V contains a pointer that can be modified through interior mutability.
+impl output table: 
+    pub fn _try_new(columns: Vec<Column>) -> Result<Self> {
+        if columns.is_empty() {
+            return Err(Error::EmptyTable);
+        }
+
+        let column_data_len = columns[0].data.len();
+
+        for column in columns.iter().skip(1) {
+            if column.data.len() != column_data_len {
+                return Err(Error::ColumnLengthDiff);
+            }
+        }
+
+        Ok(Self { columns })
+    }
+
+error storage.rs:
+    #[display("Table is empty.")]
+    EmptyTable,
+    #[display("Different length of given columns.")]
+    ColumnLengthDiff,
+

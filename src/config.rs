@@ -3,9 +3,15 @@ use std::io::ErrorKind;
 use std::net::SocketAddrV4;
 use std::path::PathBuf;
 
+/// Global static to access server configuration
+pub static CONFIG: std::sync::LazyLock<Config> = std::sync::LazyLock::new(Config::build);
+
+/// Server configuration
 #[derive(Debug, Deserialize)]
 pub struct Config {
+    /// Socket for running TCP connection
     tcp_socket: SocketAddrV4,
+    /// Storage directory
     storage_directory: PathBuf,
     /// Logging level.
     /// ### Allowed values:
@@ -78,9 +84,7 @@ impl Config {
     /// 2. When config file does not exist
     /// 2. When config file is invalid toml
     pub fn build() -> Self {
-        let config_path =
-            std::env::var("CONFIG_PATH").unwrap_or_else(|_| "touch_config.toml".to_string());
-
+        let config_path = std::env::var("CONFIG_PATH").unwrap_or("touch_config.toml".to_string());
         let config_file = std::fs::read_to_string(config_path).expect("Couldn't read config file");
         let raw_config: Self = toml::from_str(config_file.as_str()).expect("Invalid config file");
 
@@ -89,5 +93,3 @@ impl Config {
         raw_config
     }
 }
-
-pub static CONFIG: std::sync::LazyLock<Config> = std::sync::LazyLock::new(Config::build);

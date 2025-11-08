@@ -1,9 +1,10 @@
 mod config;
 mod engines;
 mod error;
+mod runtime_config;
 mod sql;
 mod storage;
-pub mod tcp_io_parser;
+mod tcp_io_parser;
 
 use futures::{SinkExt as _, StreamExt as _};
 use log::{error, info};
@@ -23,6 +24,10 @@ async fn main() {
         .filter_level(CONFIG.get_log_level())
         .init();
 
+    if let Err(e) = storage::load_all_parts_on_startup(CONFIG.get_db_dir()) {
+        error!("Failed to load parts on startup: {:?}", e);
+    }
+
     let max_conn = Arc::new(Semaphore::new(CONFIG.get_max_connections()));
 
     let listener = TcpListener::bind(&CONFIG.get_tcp_socket_addr())
@@ -35,10 +40,7 @@ async fn main() {
             )
         });
 
-    info!(
-        "Database server listening on {}",
-        CONFIG.get_tcp_socket_addr()
-    );
+    info!("TCP server listening on {}", CONFIG.get_tcp_socket_addr());
     info!("Database directory: {}", CONFIG.get_db_dir().display());
     info!("Log level: {:?}", CONFIG.get_log_level());
 
@@ -63,6 +65,8 @@ async fn main() {
 }
 
 async fn handle_connection(socket: &mut TcpStream) -> Result<()> {
+    // using tokio_util `Decoder, Encoder` traits to receive and send bytes
+    // link: https://docs.rs/tokio-util/latest/tokio_util/codec/index.html
     let mut transport = Parser.framed(socket);
 
     while let Some(sql_command) = transport.next().await {

@@ -1,20 +1,39 @@
+mod part;
 pub mod table_metadata;
 pub mod value;
 
-use crate::config::CONFIG;
-use crate::error::{Error, Result};
-pub use crate::storage::value::{Value, ValueType};
 use serde::{Deserialize, Serialize};
 use sqlparser::ast::{ObjectName, ObjectNamePart};
+use std::fmt;
 use std::path::PathBuf;
+use std::time::SystemTime;
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+use crate::CONFIG;
+use crate::error::{Error, Result};
+pub use crate::storage::part::{TablePart, load_all_parts_on_startup};
+pub use crate::storage::table_metadata::TableMetadata;
+pub use crate::storage::value::{Value, ValueType};
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub enum ColumnDefOption {
+    Null,
+    NotNull,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ColumnDefConstraint {
+    pub name: Option<String>,
+    pub option: ColumnDefOption,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ColumnDef {
     pub name: String,
     pub field_type: ValueType,
+    pub constraints: Vec<ColumnDefConstraint>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Column {
     pub column_def: ColumnDef,
     pub data: Vec<Value>,
@@ -26,28 +45,14 @@ pub struct OutputTable {
 }
 
 impl OutputTable {
-    pub fn try_new(columns: Vec<Column>) -> Result<Self> {
-        if columns.is_empty() {
-            return Err(Error::EmptyTable);
-        }
-
-        let column_data_len = columns[0].data.len();
-
-        for column in columns.iter().skip(1) {
-            if column.data.len() != column_data_len {
-                return Err(Error::ColumnLengthDiff);
-            }
-        }
-
-        Ok(Self { columns })
-    }
-
+    /// Builds a simple OK response table.
     pub fn build_ok() -> Self {
         Self {
             columns: vec![Column {
                 column_def: ColumnDef {
                     name: "OK".to_string(),
                     field_type: ValueType::String,
+                    constraints: Vec::new(),
                 },
                 data: vec![Value::String("OK".to_string())],
             }],
@@ -55,17 +60,27 @@ impl OutputTable {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TableDef {
     pub table: String,
     pub database: String,
 }
 
+impl fmt::Display for TableDef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}.{}", self.database, self.table)
+    }
+}
+
 impl TableDef {
+    /// Returns filesystem path for this table.
     pub fn get_path(&self) -> PathBuf {
         CONFIG.get_db_dir().join(&self.database).join(&self.table)
     }
 
+    /// Checks if table exists by verifying database directory and .metadata file.
+    ///
+    /// Returns: Ok or DatabaseNotFound/TableNotFound error
     pub fn exists_or_err(&self) -> Result<()> {
         let mut path = CONFIG.get_db_dir().join(&self.database);
         if !path.exists() {
@@ -111,4 +126,17 @@ impl TryFrom<&ObjectName> for TableDef {
 
         Ok(table_def)
     }
+}
+
+/// Returns current Unix timestamp in milliseconds.
+///
+/// Returns: u64 timestamp or SystemTimeWentBackword error
+pub fn get_unix_time() -> Result<u64> {
+    let now: SystemTime = SystemTime::now();
+    u64::try_from(
+        now.duration_since(SystemTime::UNIX_EPOCH)
+            .map_err(|_| Error::SystemTimeWentBackword)?
+            .as_millis(),
+    )
+    .map_err(|_| Error::SystemTimeWentBackword)
 }

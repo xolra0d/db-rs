@@ -620,6 +620,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
+name = "saa"
+version = "5.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72373418560105d15920f9f8f49a301e7aed06223748e67e022213d09aea33c2"
+
+[[package]]
+name = "scc"
+version = "3.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b873a5815f4819d6d5e19110bc9218bde76b3ec3a74d347199287099d535587"
+dependencies = [
+ "saa",
+ "sdd",
+]
+
+[[package]]
+name = "sdd"
+version = "4.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "761f511cb884dc21c5debb847b53f6dfa3e5896fb0a46c8b33be758d747f6028"
+
+[[package]]
 name = "serde"
 version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -805,6 +827,7 @@ dependencies = [
  "futures",
  "log",
  "rmp-serde",
+ "scc",
  "serde",
  "sqlparser",
  "tokio",

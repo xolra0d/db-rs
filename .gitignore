@@ -2,3 +2,4 @@
 target/
 clients/.venv/
 db_files/
+notes
