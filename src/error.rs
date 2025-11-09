@@ -35,6 +35,8 @@ pub enum Error {
     UnsupportedColumnType(String),
     #[display("Invalid engine name.")]
     InvalidEngineName,
+    #[display("Unsupported table option: {_0}")]
+    UnsupportedTableOption(String),
     #[display("Invalid ORDER BY.")]
     InvalidOrderBy,
     #[display("Invalid table name.")]

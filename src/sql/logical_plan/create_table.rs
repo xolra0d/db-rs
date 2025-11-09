@@ -8,6 +8,7 @@ use crate::engines::EngineName;
 use crate::error::{Error, Result};
 use crate::sql::sql_parser::LogicalPlan;
 use crate::sql::validate_name;
+use crate::storage::table_metadata::TableSettings;
 use crate::storage::{ColumnDef, ColumnDefConstraint, ColumnDefOption, TableDef, ValueType};
 
 impl LogicalPlan {
@@ -65,7 +66,7 @@ impl LogicalPlan {
             });
         }
 
-        let engine = Self::parse_engine_from_table_options(&create_table.table_options)?;
+        let settings = Self::parse_table_options(&create_table.table_options)?;
 
         let order_by = Self::parse_order_by(
             create_table.order_by.as_ref(),
@@ -75,7 +76,7 @@ impl LogicalPlan {
         Ok(Self::CreateTable {
             name: table_def,
             columns,
-            engine,
+            settings,
             order_by,
         })
     }
@@ -90,25 +91,28 @@ impl LogicalPlan {
     ///     1. More than 1 option is provided: InvalidEngineName
     ///     2. When option name is not "Engine".lowercase(): InvalidEngineName
     ///     3. When engine name is not valid, return error from `EngineName::try_from`
-    fn parse_engine_from_table_options(table_options: &CreateTableOptions) -> Result<EngineName> {
+    fn parse_table_options(table_options: &CreateTableOptions) -> Result<TableSettings> {
         match table_options {
-            CreateTableOptions::None => Ok(EngineName::MergeTree),
+            CreateTableOptions::None => Ok(TableSettings::default()),
             CreateTableOptions::Plain(options) => {
-                if options.len() != 1 {
-                    // todo: remove later when new options added
-                    return Err(Error::InvalidEngineName);
-                }
+                let mut table_settings = TableSettings::default();
 
-                let SqlOption::NamedParenthesizedList(ref option) = options[0] else {
-                    return Err(Error::InvalidEngineName);
-                };
+                for option in options {
+                    let SqlOption::NamedParenthesizedList(option) = option else {
+                        return Err(Error::InvalidEngineName);
+                    };
+                    let name = option.key.value.to_lowercase();
 
-                let name = option.key.value.to_lowercase();
-                if name != "engine" {
-                    return Err(Error::InvalidEngineName);
+                    match name.as_str() {
+                        "engine" => {
+                            let key = option.name.as_ref().ok_or(Error::InvalidEngineName)?;
+                            table_settings.engine = EngineName::try_from(key.value.as_str())?;
+                            Ok(())
+                        }
+                        _ => Err(Error::UnsupportedTableOption(name)),
+                    }?;
                 }
-                let key = option.name.as_ref().ok_or(Error::InvalidEngineName)?;
-                EngineName::try_from(key.value.as_str())
+                Ok(table_settings)
             }
             _ => Err(Error::InvalidEngineName),
         }

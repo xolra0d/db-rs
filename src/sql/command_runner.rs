@@ -26,9 +26,9 @@ impl CommandRunner {
             PhysicalPlan::CreateTable {
                 name,
                 columns,
-                engine,
+                settings,
                 order_by,
-            } => Self::create_table(name, columns, engine, order_by),
+            } => Self::create_table(name, columns, settings, order_by),
             PhysicalPlan::Insert { table_def, columns } => Self::insert(table_def, columns),
         }
     }

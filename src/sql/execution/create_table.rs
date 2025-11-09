@@ -1,11 +1,10 @@
 use scc::hash_index::Entry;
 
-use crate::engines::EngineName;
 use crate::error::{Error, Result};
 use crate::runtime_config::{TABLE_DATA, TableConfig};
 use crate::sql::CommandRunner;
-use crate::storage::table_metadata::{TableMetadata, TableSchema};
 use crate::storage::{ColumnDef, OutputTable, TableDef};
+use crate::storage::{TableMetadata, TableSchema, TableSettings};
 
 impl CommandRunner {
     /// Creates a table with metadata and filesystem structures.
@@ -18,11 +17,11 @@ impl CommandRunner {
     pub fn create_table(
         table_def: TableDef,
         columns: Vec<ColumnDef>,
-        engine: EngineName,
+        settings: TableSettings,
         order_by: Vec<ColumnDef>,
     ) -> Result<OutputTable> {
         let table_schema = TableSchema { columns, order_by };
-        let table_metadata = TableMetadata::try_new(table_schema, engine)?;
+        let table_metadata = TableMetadata::try_new(table_schema, settings)?;
 
         match TABLE_DATA.entry_sync(table_def.clone()) {
             Entry::Occupied(_) => {

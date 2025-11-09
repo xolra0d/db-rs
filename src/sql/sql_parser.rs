@@ -2,8 +2,8 @@ use sqlparser::ast::Statement;
 use sqlparser::dialect::ClickHouseDialect;
 use sqlparser::parser::Parser;
 
-use crate::engines::EngineName;
 use crate::error::{Error, Result};
+use crate::storage::table_metadata::TableSettings;
 use crate::storage::{Column, ColumnDef, TableDef};
 
 /// High level representation of the SQL query.
@@ -19,7 +19,7 @@ pub enum LogicalPlan {
     CreateTable {
         name: TableDef,
         columns: Vec<ColumnDef>,
-        engine: EngineName,
+        settings: TableSettings,
         order_by: Vec<ColumnDef>,
     },
 
@@ -77,7 +77,7 @@ pub enum PhysicalPlan {
     CreateTable {
         name: TableDef,
         columns: Vec<ColumnDef>,
-        engine: EngineName,
+        settings: TableSettings,
         order_by: Vec<ColumnDef>,
     },
 
@@ -96,12 +96,12 @@ impl From<LogicalPlan> for PhysicalPlan {
             LogicalPlan::CreateTable {
                 name,
                 columns,
-                engine,
+                settings,
                 order_by,
             } => Self::CreateTable {
                 name,
                 columns,
-                engine,
+                settings,
                 order_by,
             },
             LogicalPlan::Insert { table_def, columns } => Self::Insert { table_def, columns },

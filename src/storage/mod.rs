@@ -1,5 +1,5 @@
-mod part;
 pub mod table_metadata;
+mod table_part;
 pub mod value;
 
 use serde::{Deserialize, Serialize};
@@ -10,8 +10,8 @@ use std::time::SystemTime;
 
 use crate::CONFIG;
 use crate::error::{Error, Result};
-pub use crate::storage::part::{TablePart, load_all_parts_on_startup};
-pub use crate::storage::table_metadata::TableMetadata;
+pub use crate::storage::table_metadata::{TableMetadata, TableSchema, TableSettings};
+pub use crate::storage::table_part::{TablePart, load_all_parts_on_startup};
 pub use crate::storage::value::{Value, ValueType};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]

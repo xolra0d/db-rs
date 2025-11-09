@@ -37,10 +37,9 @@ def run(host: str, port: int):
 
         while True:
             sql_command = input("> ")
-
+            
             encoded_command = encode_message(sql_command)
             _ = sock.send(encoded_command)
-
 
             header_bytes = sock.recv(8)
             if not header_bytes:

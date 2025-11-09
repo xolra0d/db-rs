@@ -33,10 +33,14 @@ impl TryFrom<(SQLValue, &ValueType)> for Value {
             SQLValue::SingleQuotedString(string)
             | SQLValue::TripleSingleQuotedString(string)
             | SQLValue::TripleDoubleQuotedString(string) => {
-                if value_type != &ValueType::String {
-                    return Err(Error::InvalidSource);
+                if value_type == &ValueType::String {
+                    Ok(Self::String(string))
+                } else if value_type == &ValueType::Uuid {
+                    let uuid = Uuid::parse_str(&string).map_err(|_| Error::InvalidSource)?;
+                    Ok(Self::Uuid(uuid))
+                } else {
+                    Err(Error::InvalidSource)
                 }
-                Ok(Self::String(string))
             }
             SQLValue::Number(number, _) => {
                 let parse_err = |_| Error::InvalidSource;

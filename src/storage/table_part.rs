@@ -8,10 +8,10 @@ use crate::runtime_config::{TABLE_DATA, TableConfig};
 use crate::storage::table_metadata::TableMetadata;
 use crate::storage::{Column, ColumnDef, TableDef};
 
-const INDEX_GRANULARITY: usize = 8192;
 const MAGIC_BYTES_DATA: &[u8] = b"THDATA".as_slice();
 const MAGIC_BYTES_INDEX: &[u8] = b"THINDX".as_slice();
 
+/// Immutable table part used to store insert data.
 #[derive(Debug, Clone)]
 pub struct TablePart {
     pub name: String,
@@ -31,10 +31,14 @@ impl TablePart {
     ) -> Result<(Self, Vec<Column>)> {
         let name = Uuid::now_v7().to_string();
 
-        let engine = engines::get_engine(&table_metadata.engine, None);
+        let engine = engines::get_engine(&table_metadata.settings.engine, None);
         let columns = engine.order_columns(columns, &table_metadata.schema.order_by)?;
 
-        let indexes = generate_indexes(&columns, &table_metadata.schema.order_by);
+        let indexes = generate_indexes(
+            &columns,
+            &table_metadata.schema.order_by,
+            table_metadata.settings.index_granularity,
+        );
 
         Ok((Self { name, indexes }, columns))
     }
@@ -74,17 +78,12 @@ impl TablePart {
         let part = self.clone();
 
         // Acquire exclusive access to TABLE_DATA entry BEFORE filesystem operations
-        // This ensures:
-        // 1. Memory and disk updates appear atomic to readers
-        // 2. No other thread can modify this table's parts during our operation
-        // 3. Crash recovery via load_all_parts_on_startup() handles crashes between steps
         let Some(mut entry) = TABLE_DATA.get_sync(table_def) else {
             return Err(Error::CouldNotInsertData(
                 "Could not store in memory".to_string(),
             ));
         };
 
-        // Update memory FIRST (makes the part visible to queries immediately)
         // This is safe because:
         // - We have exclusive access via OccupiedEntry from get_sync()
         // - No other thread can modify this entry while we hold it
@@ -93,8 +92,7 @@ impl TablePart {
             entry.get_mut().indexes.push(part);
         }
 
-        // Then persist to disk (atomic filesystem operation)
-        // If this fails, we need to rollback the memory update
+        // Then persist to disk
         if let Err(e) = std::fs::rename(&raw_dir, &normal_dir) {
             // Rollback: remove the part we just added
             unsafe {
@@ -159,7 +157,11 @@ impl TablePart {
     }
 }
 
-fn generate_indexes(columns: &[Column], order_by: &[ColumnDef]) -> Vec<Column> {
+fn generate_indexes(
+    columns: &[Column],
+    order_by: &[ColumnDef],
+    index_granularity: u32,
+) -> Vec<Column> {
     let columns_in_order_by: Vec<&Column> = columns
         .iter()
         .filter(|x| order_by.contains(&x.column_def))
@@ -174,7 +176,8 @@ fn generate_indexes(columns: &[Column], order_by: &[ColumnDef]) -> Vec<Column> {
         .collect();
 
     for (col_idx, column) in columns_in_order_by.iter().enumerate() {
-        for col_value in column.data.iter().step_by(INDEX_GRANULARITY) {
+        // U32 AS USIZE (consider check?)
+        for col_value in column.data.iter().step_by(index_granularity as usize) {
             indexes[col_idx].data.push(col_value.clone());
         }
     }

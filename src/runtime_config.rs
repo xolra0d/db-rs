@@ -2,6 +2,7 @@ use scc::HashIndex;
 
 use crate::storage::{TableDef, TableMetadata, TablePart};
 
+#[derive(Debug, Clone)]
 pub struct TableConfig {
     pub metadata: TableMetadata,
     pub indexes: Vec<TablePart>,
