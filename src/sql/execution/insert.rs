@@ -20,18 +20,14 @@ impl CommandRunner {
             return Err(Error::TableNotFound);
         };
 
-        let (table_part, data) = TablePart::try_new(&table_config.metadata, columns)?;
+        let mut table_part = TablePart::try_new(&table_config.metadata, columns)?;
+        let index_granularity = table_config.metadata.settings.index_granularity;
 
-        table_part.save_raw(&table_def, &data)?;
+        table_part.save_raw(&table_def, index_granularity)?;
 
         let move_result = table_part.move_to_normal(&table_def);
         if move_result.is_ok() {
             return Ok(OutputTable::build_ok());
-        }
-
-        if let Err(cleanup_err) = table_part.remove_raw(&table_def) {
-            // Log cleanup failure, but don't override original error
-            log::warn!("Failed to clean up raw data: {}", cleanup_err);
         }
 
         Err(Error::CouldNotInsertData(

@@ -6,12 +6,13 @@ use crate::storage::Column;
 use crate::storage::ColumnDef;
 use serde::{Deserialize, Serialize};
 
-#[allow(dead_code)]
+/// Interface for every engine to follow.
 pub trait Engine {
-    fn name(&self) -> &'static str;
+    /// Orders columns for insert by `order_by`.
     fn order_columns(&self, columns: Vec<Column>, order_by: &[ColumnDef]) -> Result<Vec<Column>>;
 }
 
+/// Used for storing engine name in metadata.
 #[derive(Debug, Serialize, Deserialize, Eq, Hash, PartialEq, Clone)]
 pub enum EngineName {
     MergeTree,
@@ -27,15 +28,13 @@ impl TryFrom<&str> for EngineName {
     }
 }
 
+/// Engine configuration. Used to configure engine before running.
 #[derive(Default)]
 pub struct EngineConfig {}
 
 /// Returns engine implementation for the given engine name.
-///
-/// Uses provided config or defaults if None.
-#[allow(dead_code)]
-pub fn get_engine(name: &EngineName, config: Option<EngineConfig>) -> Box<dyn Engine> {
+pub fn get_engine(name: &EngineName, config: EngineConfig) -> Box<dyn Engine> {
     match name {
-        EngineName::MergeTree => Box::new(MergeTreeEngine::new(config.unwrap_or_default())),
+        EngineName::MergeTree => Box::new(MergeTreeEngine::new(config)),
     }
 }

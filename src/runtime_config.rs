@@ -1,11 +1,11 @@
 use scc::HashIndex;
 
-use crate::storage::{TableDef, TableMetadata, TablePart};
+use crate::storage::{TableDef, TableMetadata, TablePartInfo};
 
 #[derive(Debug, Clone)]
 pub struct TableConfig {
     pub metadata: TableMetadata,
-    pub indexes: Vec<TablePart>,
+    pub infos: Vec<TablePartInfo>,
 }
 
 // Using HashIndex, as it's optimized for read access

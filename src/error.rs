@@ -13,8 +13,6 @@ pub enum Error {
     DatabaseNotFound,
     #[display("Table not found.")]
     TableNotFound,
-    #[display("Invalid table.")]
-    InvalidTable,
     #[display("Invalid database name.")]
     InvalidDatabaseName,
     #[display("Invalid column name: {_0}")]
@@ -51,8 +49,8 @@ pub enum Error {
     UnsupportedColumnConstraint(String),
     #[display("Could not insert data: {_0}.")]
     CouldNotInsertData(String),
-    #[display("Could not remove bad part: {_0}.")]
-    CouldNotRemoveBadPart(String),
+    #[display("Could not read data: {_0}.")]
+    CouldNotReadData(String),
     #[display("No values provided")]
     EmptySource,
     #[display("Table entry already exists")]

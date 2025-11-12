@@ -18,3 +18,4 @@ sqlparser = "0.59.0"
 derive_more = { version = "2.0.1", features = ["display"] }
 bincode = { version = "2.0.1", features = ["serde", "std"] }
 scc = "3.3.5"
+lz4 = "1.28.1"

@@ -110,3 +110,84 @@ impl TryFrom<&SQLDatatype> for ValueType {
         }
     }
 }
+
+impl Value {
+    pub fn get_type(&self) -> ValueType {
+        match &self {
+            Value::Null => ValueType::Null,
+            Value::String(_) => ValueType::String,
+            Value::Uuid(_) => ValueType::Uuid,
+            Value::Bool(_) => ValueType::Bool,
+            Value::Int8(_) => ValueType::Int8,
+            Value::Int16(_) => ValueType::Int16,
+            Value::Int32(_) => ValueType::Int32,
+            Value::Int64(_) => ValueType::Int64,
+            Value::UInt8(_) => ValueType::UInt8,
+            Value::UInt16(_) => ValueType::UInt16,
+            Value::UInt32(_) => ValueType::UInt32,
+            Value::UInt64(_) => ValueType::UInt64,
+        }
+    }
+}
+use std::cmp::Ordering;
+/// Compares two values and returns their ordering.
+pub fn compare_values(left: &Value, right: &Value) -> crate::error::Result<Ordering> {
+    match (left, right) {
+        // Non-numeric exact matches
+        (Value::String(l), Value::String(r)) => Ok(l.cmp(r)),
+        (Value::Bool(l), Value::Bool(r)) => Ok(l.cmp(r)),
+        (Value::Uuid(l), Value::Uuid(r)) => Ok(l.cmp(r)),
+
+        (
+            l @ (Value::Int8(_) | Value::Int16(_) | Value::Int32(_) | Value::Int64(_)),
+            r @ (Value::Int8(_) | Value::Int16(_) | Value::Int32(_) | Value::Int64(_)),
+        ) => Ok(to_i64(l).cmp(&to_i64(r))),
+
+        (
+            l @ (Value::UInt8(_) | Value::UInt16(_) | Value::UInt32(_) | Value::UInt64(_)),
+            r @ (Value::UInt8(_) | Value::UInt16(_) | Value::UInt32(_) | Value::UInt64(_)),
+        ) => Ok(to_u64(l).cmp(&to_u64(r))),
+
+        (
+            l @ (Value::Int8(_) | Value::Int16(_) | Value::Int32(_) | Value::Int64(_)),
+            r @ (Value::UInt8(_) | Value::UInt16(_) | Value::UInt32(_) | Value::UInt64(_)),
+        ) => compare_signed_unsigned(to_i64(l), to_u64(r)),
+
+        (
+            l @ (Value::UInt8(_) | Value::UInt16(_) | Value::UInt32(_) | Value::UInt64(_)),
+            r @ (Value::Int8(_) | Value::Int16(_) | Value::Int32(_) | Value::Int64(_)),
+        ) => compare_signed_unsigned(to_i64(r), to_u64(l)).map(|o| o.reverse()),
+
+        _ => Err(Error::UnsupportedCommand(
+            "Type mismatch in comparison".to_string(),
+        )),
+    }
+}
+
+fn to_i64(val: &Value) -> i64 {
+    match val {
+        Value::Int8(v) => *v as i64,
+        Value::Int16(v) => *v as i64,
+        Value::Int32(v) => *v as i64,
+        Value::Int64(v) => *v,
+        _ => unreachable!(),
+    }
+}
+
+fn to_u64(val: &Value) -> u64 {
+    match val {
+        Value::UInt8(v) => *v as u64,
+        Value::UInt16(v) => *v as u64,
+        Value::UInt32(v) => *v as u64,
+        Value::UInt64(v) => *v,
+        _ => unreachable!(),
+    }
+}
+
+fn compare_signed_unsigned(signed: i64, unsigned: u64) -> crate::error::Result<Ordering> {
+    if signed < 0 || unsigned > i64::MAX as u64 {
+        Ok(Ordering::Less)
+    } else {
+        Ok(signed.cmp(&(unsigned as i64)))
+    }
+}

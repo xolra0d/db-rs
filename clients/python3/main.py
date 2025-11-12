@@ -22,7 +22,10 @@ def decode_and_print_table(message_bytes: bytes):
             column_name = column[0][0]
             data = []
             for val in column[1]:
-                data.append(list(val.values())[0])
+                if isinstance(val, dict):
+                    data.append(list(val.values())[0])
+                else:
+                    data.append(val)
             table.add_column(column_name, data)
         print(table)
     elif error := message.get("Err"):
