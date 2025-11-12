@@ -1,21 +1,133 @@
 use log::{info, warn};
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use crate::engines;
+use crate::engines::EngineConfig;
 use crate::error::{Error, Result};
 use crate::runtime_config::{TABLE_DATA, TableConfig};
-use crate::storage::table_metadata::TableMetadata;
-use crate::storage::{Column, ColumnDef, TableDef};
+use crate::storage::compression::{compress_bytes, decompress_bytes};
+use crate::storage::table_metadata::{
+    TABLE_METADATA_FILENAME, TABLE_METADATA_MAGIC_BYTES, TableMetadata,
+};
+use crate::storage::{Column, ColumnDef, TableDef, Value, read_file_with_crc, write_file_with_crc};
 
-const MAGIC_BYTES_DATA: &[u8] = b"THDATA".as_slice();
-const MAGIC_BYTES_INDEX: &[u8] = b"THINDX".as_slice();
+pub const MAGIC_BYTES_COLUMN: &[u8] = b"THDATA".as_slice();
+pub const MAGIC_BYTES_INFO: &[u8] = b"THINDX".as_slice();
+pub const PART_INFO_FILENAME: &str = "part.inf";
 
-/// Immutable table part used to store insert data.
+/// Represents a start byte position and end byte position of the
+/// compressed granule.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarkInfo {
+    start: u64,
+    end: u64,
+}
+
+/// Represents a first row of each granule as well as it's starting position and ending.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Mark {
+    pub index: Vec<Value>,
+    pub info: Vec<MarkInfo>, // compression
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TablePartInfo {
+    pub name: String,
+    pub row_count: u64, // max rows per tablepart = 18_446_744_073_709_551_615
+    pub marks: Vec<Mark>,
+    pub column_defs: Vec<ColumnDef>,
+}
+
+impl TablePartInfo {
+    pub fn get_column_path(&self, table_def: &TableDef, column_def: &ColumnDef) -> PathBuf {
+        table_def
+            .get_path()
+            .join(&self.name)
+            .join(format!("{}.bin", column_def.name))
+    }
+
+    /// Reads and decompresses a column from disk using granule-based storage.
+    ///
+    /// Reads specified granules according to MarkInfo slice, decompresses them, and combines into a Column.
+    ///
+    /// Args:
+    ///   * table_def: Table definition for path resolution
+    ///   * column_def: Column to read
+    ///   * mark_infos: Slice of MarkInfo for granules to read (selective reading)
+    ///
+    /// Returns: Column with data from specified granules or CouldNotReadData on failure
+    pub fn read_column(
+        &self,
+        table_def: &TableDef,
+        column_def: &ColumnDef,
+        mark_infos: &[MarkInfo],
+    ) -> Result<Column> {
+        let column_path = self.get_column_path(table_def, column_def);
+
+        let file_bytes = std::fs::read(&column_path)
+            .map_err(|e| Error::CouldNotReadData(format!("Failed to read column file: {}", e)))?;
+
+        if file_bytes.len() <= MAGIC_BYTES_COLUMN.len() + 4 {
+            return Err(Error::CouldNotReadData("Column file too small".to_string()));
+        }
+
+        let file_magic_bytes = &file_bytes[0..MAGIC_BYTES_COLUMN.len()];
+        if file_magic_bytes != MAGIC_BYTES_COLUMN {
+            return Err(Error::CouldNotReadData(
+                "Invalid magic bytes in column file".to_string(),
+            ));
+        }
+
+        // Verify CRC
+        let data_bytes = &file_bytes[MAGIC_BYTES_COLUMN.len()..(file_bytes.len() - 4)];
+        let expected_crc = u32::from_le_bytes([
+            file_bytes[file_bytes.len() - 4],
+            file_bytes[file_bytes.len() - 3],
+            file_bytes[file_bytes.len() - 2],
+            file_bytes[file_bytes.len() - 1],
+        ]);
+        let actual_crc = crc32fast::hash(data_bytes);
+        if expected_crc != actual_crc {
+            return Err(Error::CouldNotReadData(
+                "CRC mismatch in column file".to_string(),
+            ));
+        }
+
+        let mut all_values = Vec::new();
+
+        for mark_info in mark_infos {
+            // Adjusting start,end to exclude magic bytes
+            let start = (mark_info.start as usize) - MAGIC_BYTES_COLUMN.len();
+            let end = (mark_info.end as usize) - MAGIC_BYTES_COLUMN.len();
+            let granule_compressed_bytes = &data_bytes[start..end];
+
+            let granule_bytes =
+                decompress_bytes(granule_compressed_bytes, column_def.field_type.clone())?;
+
+            let granule_values: Vec<Value> =
+                bincode::serde::decode_from_slice(&granule_bytes, bincode::config::standard())
+                    .map(|x| x.0)
+                    .map_err(|e| {
+                        Error::CouldNotReadData(format!("Failed to deserialize granule: {}", e))
+                    })?;
+
+            all_values.extend(granule_values);
+        }
+
+        Ok(Column {
+            column_def: column_def.clone(),
+            data: all_values,
+        })
+    }
+}
+
+/// Immutable table part information.
 #[derive(Debug, Clone)]
 pub struct TablePart {
-    pub name: String,
-    pub indexes: Vec<Column>,
+    pub info: TablePartInfo,
+    pub data: Vec<Column>,
 }
 
 impl TablePart {
@@ -25,44 +137,97 @@ impl TablePart {
     /// for ORDER BY columns with INDEX_GRANULARITY.
     ///
     /// Returns: (TablePart, ordered columns) or engine error
-    pub fn try_new(
-        table_metadata: &TableMetadata,
-        columns: Vec<Column>,
-    ) -> Result<(Self, Vec<Column>)> {
+    pub fn try_new(table_metadata: &TableMetadata, columns: Vec<Column>) -> Result<Self> {
+        if columns.is_empty() || columns[0].data.is_empty() {
+            return Err(Error::InvalidSource);
+        }
         let name = Uuid::now_v7().to_string();
 
-        let engine = engines::get_engine(&table_metadata.settings.engine, None);
-        let columns = engine.order_columns(columns, &table_metadata.schema.order_by)?;
+        let engine = engines::get_engine(&table_metadata.settings.engine, EngineConfig::default());
+        let data = engine.order_columns(columns, &table_metadata.schema.order_by)?;
 
-        let indexes = generate_indexes(
-            &columns,
+        let marks = generate_indexes(
+            &data,
             &table_metadata.schema.order_by,
             table_metadata.settings.index_granularity,
         );
+        let row_count = data[0].data.len() as u64;
 
-        Ok((Self { name, indexes }, columns))
+        let info = TablePartInfo {
+            name,
+            marks,
+            row_count,
+            column_defs: data.iter().map(|col| col.column_def.clone()).collect(),
+        };
+
+        Ok(Self { info, data })
     }
 
     /// Saves part data and indexes to raw directory.
     ///
-    /// Writes each column to separate .bin file and indexes to primary.idx.
+    /// Writes each column to separate .bin file and info to `PART_INFO_FILENAME`.
     /// All files include magic bytes and CRC32 checksums.
     ///
     /// Returns: Ok or CouldNotInsertData on I/O failure
-    pub fn save_raw(&self, table_def: &TableDef, data: &[Column]) -> Result<()> {
+    pub fn save_raw(&mut self, table_def: &TableDef, index_granularity: u32) -> Result<()> {
         let raw_dir = self.get_raw_dir(table_def);
         std::fs::create_dir_all(&raw_dir)
             .map_err(|_| Error::CouldNotInsertData("Failed to create raw directory".to_string()))?;
 
-        for column in data {
-            let column_file = raw_dir.join(format!("{}.bin", column.column_def.name));
-            Self::write_column_to_file(column, &column_file, MAGIC_BYTES_DATA)?;
+        for col_idx in 0..self.data.len() {
+            let column_file = raw_dir.join(format!("{}.bin", self.data[col_idx].column_def.name));
+            self.write_column_with_marks(col_idx, &column_file, index_granularity)?;
         }
 
-        let index_file = raw_dir.join("primary.idx");
-        Self::write_columns_to_file(&self.indexes, &index_file, MAGIC_BYTES_INDEX)?;
+        let info_file = raw_dir.join(PART_INFO_FILENAME);
+        write_file_with_crc(&self.info, &info_file, MAGIC_BYTES_INFO)?;
 
         Ok(())
+    }
+
+    /// Writes a single column file with granule-by-granule serialization and populates MarkInfo.
+    fn write_column_with_marks(
+        &mut self,
+        col_idx: usize,
+        path: &PathBuf,
+        index_granularity: u32,
+    ) -> Result<()> {
+        let mut file_bytes = Vec::from(MAGIC_BYTES_COLUMN);
+        let granule_size = index_granularity as usize;
+        let total_rows = self.data[col_idx].data.len();
+
+        for (granule_idx, chunk_start) in (0..total_rows).step_by(granule_size).enumerate() {
+            let chunk_end = (chunk_start + granule_size).min(total_rows);
+            let granule_data = &self.data[col_idx].data[chunk_start..chunk_end];
+
+            let start_pos = file_bytes.len() as u64;
+
+            let granule_bytes =
+                bincode::serde::encode_to_vec(granule_data, bincode::config::standard()).map_err(
+                    |e| Error::CouldNotInsertData(format!("Failed to serialize granule: {}", e)),
+                )?;
+            let granule_bytes = compress_bytes(&granule_bytes, granule_data[0].get_type())?;
+            file_bytes.extend(&granule_bytes);
+            let end_pos = file_bytes.len() as u64;
+
+            if granule_idx >= self.info.marks.len() {
+                return Err(Error::CouldNotInsertData(
+                    "Invalid number of granules. Most probably different column sizes".to_string(),
+                ));
+            }
+
+            self.info.marks[granule_idx].info.push(MarkInfo {
+                start: start_pos,
+                end: end_pos,
+            });
+        }
+
+        let data_bytes = &file_bytes[MAGIC_BYTES_COLUMN.len()..];
+        let crc = crc32fast::hash(data_bytes);
+        file_bytes.extend(crc.to_le_bytes());
+
+        std::fs::write(path, file_bytes)
+            .map_err(|e| Error::CouldNotInsertData(format!("Failed to write file: {}", e)))
     }
 
     /// Atomically moves part from raw to normal directory and updates in-memory index.
@@ -73,9 +238,7 @@ impl TablePart {
     /// Returns: Ok or CouldNotInsertData with rollback on failure
     pub fn move_to_normal(&self, table_def: &TableDef) -> Result<()> {
         let raw_dir = self.get_raw_dir(table_def);
-        let normal_dir = self.get_normal_dir(table_def);
-
-        let part = self.clone();
+        let normal_dir = table_def.get_path().join(&self.info.name);
 
         // Acquire exclusive access to TABLE_DATA entry BEFORE filesystem operations
         let Some(mut entry) = TABLE_DATA.get_sync(table_def) else {
@@ -88,72 +251,28 @@ impl TablePart {
         // - We have exclusive access via OccupiedEntry from get_sync()
         // - No other thread can modify this entry while we hold it
         // - The part is cloned, so no lifetime issues
+        let index;
         unsafe {
-            entry.get_mut().indexes.push(part);
+            entry.get_mut().infos.push(self.info.clone());
+            index = entry.infos.len() - 1;
         }
 
-        // Then persist to disk
+        // atomic move
         if let Err(e) = std::fs::rename(&raw_dir, &normal_dir) {
             // Rollback: remove the part we just added
             unsafe {
-                entry.get_mut().indexes.pop();
+                entry.get_mut().infos.remove(index);
             }
             return Err(Error::CouldNotInsertData(format!(
-                "Failed to move part directory: {}",
-                e
+                "Failed to move part directory: {e}"
             )));
         }
 
         Ok(())
     }
 
-    /// Removes raw directory for cleanup after failures.
-    ///
-    /// Returns: Ok or CouldNotRemoveBadPart
-    pub fn remove_raw(&self, table_def: &TableDef) -> Result<()> {
-        let raw_dir = self.get_raw_dir(table_def);
-        std::fs::remove_dir_all(&raw_dir)
-            .map_err(|_| Error::CouldNotRemoveBadPart(self.name.clone()))
-    }
-
     fn get_raw_dir(&self, table_def: &TableDef) -> PathBuf {
-        table_def.get_path().join("raw").join(&self.name)
-    }
-
-    fn get_normal_dir(&self, table_def: &TableDef) -> PathBuf {
-        table_def.get_path().join(&self.name)
-    }
-
-    fn write_column_to_file(column: &Column, path: &PathBuf, magic_bytes: &[u8]) -> Result<()> {
-        let mut bytes = Vec::from(magic_bytes);
-
-        let data_bytes = bincode::serde::encode_to_vec(column, bincode::config::standard())
-            .map_err(|e| Error::CouldNotInsertData(format!("Failed to serialize column: {}", e)))?;
-
-        let crc = crc32fast::hash(&data_bytes);
-
-        bytes.extend(data_bytes);
-        bytes.extend(crc.to_le_bytes());
-
-        std::fs::write(path, bytes)
-            .map_err(|e| Error::CouldNotInsertData(format!("Failed to write file: {}", e)))
-    }
-
-    fn write_columns_to_file(columns: &[Column], path: &PathBuf, magic_bytes: &[u8]) -> Result<()> {
-        let mut bytes = Vec::from(magic_bytes);
-
-        let data_bytes = bincode::serde::encode_to_vec(columns, bincode::config::standard())
-            .map_err(|e| {
-                Error::CouldNotInsertData(format!("Failed to serialize columns: {}", e))
-            })?;
-
-        let crc = crc32fast::hash(&data_bytes);
-
-        bytes.extend(data_bytes);
-        bytes.extend(crc.to_le_bytes());
-
-        std::fs::write(path, bytes)
-            .map_err(|e| Error::CouldNotInsertData(format!("Failed to write file: {}", e)))
+        table_def.get_path().join("raw").join(&self.info.name)
     }
 }
 
@@ -161,28 +280,27 @@ fn generate_indexes(
     columns: &[Column],
     order_by: &[ColumnDef],
     index_granularity: u32,
-) -> Vec<Column> {
+) -> Vec<Mark> {
     let columns_in_order_by: Vec<&Column> = columns
         .iter()
         .filter(|x| order_by.contains(&x.column_def))
         .collect();
 
-    let mut indexes: Vec<Column> = columns_in_order_by
-        .iter()
-        .map(|x| Column {
-            column_def: x.column_def.clone(),
-            data: Vec::new(),
-        })
-        .collect();
+    let total_rows = columns_in_order_by.first().map_or(0, |x| x.data.len());
+    let num_granules = total_rows.div_ceil(index_granularity as usize);
+    let mut marks = Vec::with_capacity(num_granules);
 
-    for (col_idx, column) in columns_in_order_by.iter().enumerate() {
-        // U32 AS USIZE (consider check?)
-        for col_value in column.data.iter().step_by(index_granularity as usize) {
-            indexes[col_idx].data.push(col_value.clone());
-        }
+    for row_idx in (0..total_rows).step_by(index_granularity as usize) {
+        let row_values: Vec<Value> = columns_in_order_by
+            .iter()
+            .map(|x| x.data[row_idx].clone())
+            .collect();
+        marks.push(Mark {
+            index: row_values,
+            info: Vec::new(), // Will be filled during `save_raw`
+        });
     }
-
-    indexes
+    marks
 }
 
 /// Loads all table parts from filesystem into memory on startup.
@@ -241,7 +359,10 @@ pub fn load_all_parts_on_startup(db_dir: &Path) -> Result<()> {
                 table: table_name.clone(),
             };
 
-            let Ok(table_metadata) = TableMetadata::read_from(&table_def) else {
+            let Ok(table_metadata) = read_file_with_crc::<TableMetadata>(
+                &table_def.get_path().join(TABLE_METADATA_FILENAME),
+                TABLE_METADATA_MAGIC_BYTES,
+            ) else {
                 continue;
             };
 
@@ -279,21 +400,22 @@ pub fn load_all_parts_on_startup(db_dir: &Path) -> Result<()> {
                     continue;
                 }
 
-                match load_part_indexes(&part_name, &part_path) {
-                    Ok(part) => {
+                let part_info_file_path = part_path.join(PART_INFO_FILENAME);
+                match read_file_with_crc(&part_info_file_path, MAGIC_BYTES_INFO) {
+                    Ok(info) => {
                         let mut entry =
                             TABLE_DATA
                                 .entry_sync(table_def.clone())
                                 .or_insert(TableConfig {
                                     metadata: table_metadata.clone(),
-                                    indexes: Vec::new(),
+                                    infos: Vec::new(),
                                 });
 
                         // This is safe, because
                         // we receive exclusive access to the entry (as uses `OccupiedEntry`),
                         // and no other thread can modify it.
                         unsafe {
-                            entry.get_mut().indexes.push(part);
+                            entry.get_mut().infos.push(info);
                         }
 
                         info!("Loaded part {} for table {}", part_name, table_def);
@@ -311,62 +433,4 @@ pub fn load_all_parts_on_startup(db_dir: &Path) -> Result<()> {
 
     info!("Finished loading parts");
     Ok(())
-}
-
-fn load_part_indexes(part_name: &str, part_path: &Path) -> Result<TablePart> {
-    let index_file = part_path.join("primary.idx");
-
-    if !index_file.exists() {
-        return Err(Error::CouldNotInsertData(format!(
-            "Index file not found for part {}",
-            part_name
-        )));
-    }
-
-    let file_bytes = std::fs::read(&index_file)
-        .map_err(|e| Error::CouldNotInsertData(format!("Failed to read index file: {}", e)))?;
-
-    if file_bytes.len() <= MAGIC_BYTES_INDEX.len() + 4 {
-        return Err(Error::CouldNotInsertData(format!(
-            "Index file too small for part {}",
-            part_name
-        )));
-    }
-
-    let file_magic_bytes = &file_bytes[0..MAGIC_BYTES_INDEX.len()];
-    if file_magic_bytes != MAGIC_BYTES_INDEX {
-        return Err(Error::CouldNotInsertData(format!(
-            "Invalid magic bytes in index file for part {}",
-            part_name
-        )));
-    }
-
-    let data_bytes = &file_bytes[MAGIC_BYTES_INDEX.len()..(file_bytes.len() - 4)];
-
-    let expected_crc = u32::from_le_bytes([
-        file_bytes[file_bytes.len() - 4],
-        file_bytes[file_bytes.len() - 3],
-        file_bytes[file_bytes.len() - 2],
-        file_bytes[file_bytes.len() - 1],
-    ]);
-
-    let actual_crc = crc32fast::hash(data_bytes);
-    if expected_crc != actual_crc {
-        return Err(Error::CouldNotInsertData(format!(
-            "CRC mismatch in index file for part {}",
-            part_name
-        )));
-    }
-
-    let indexes: Vec<Column> =
-        bincode::serde::decode_from_slice(data_bytes, bincode::config::standard())
-            .map(|x| x.0)
-            .map_err(|e| {
-                Error::CouldNotInsertData(format!("Failed to deserialize indexes: {}", e))
-            })?;
-
-    Ok(TablePart {
-        name: part_name.to_string(),
-        indexes,
-    })
 }

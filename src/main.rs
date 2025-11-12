@@ -82,7 +82,15 @@ async fn handle_connection(socket: &mut TcpStream) -> Result<()> {
             break;
         }
 
-        let output = CommandRunner::execute_command(&value);
+        let output = tokio::task::spawn_blocking(move || CommandRunner::execute_command(&value))
+            .await
+            .unwrap_or_else(|e| {
+                error!("Blocking task panicked: {e}");
+                Err(Error::UnsupportedCommand(
+                    "Internal error during query execution".to_string(),
+                ))
+            });
+
         if let Err(send_error) = transport.send(output).await {
             error!("Failed to send response: {send_error}");
             return Err(Error::SendResponse);

@@ -1,6 +1,7 @@
 use crate::engines::{Engine, EngineConfig};
 use crate::error::{Error, Result};
-use crate::storage::{Column, ColumnDef, Value};
+use crate::storage::value::compare_values;
+use crate::storage::{Column, ColumnDef};
 
 #[allow(dead_code)]
 pub struct MergeTreeEngine {
@@ -14,10 +15,6 @@ impl MergeTreeEngine {
 }
 
 impl Engine for MergeTreeEngine {
-    fn name(&self) -> &'static str {
-        "MergeTree"
-    }
-
     fn order_columns(
         &self,
         mut columns: Vec<Column>,
@@ -51,7 +48,8 @@ impl Engine for MergeTreeEngine {
                 let col_a = &columns[col_idx].data[a];
                 let col_b = &columns[col_idx].data[b];
 
-                let cmp = compare_values(col_a, col_b);
+                // If comparison fails, treat values as equal to continue sorting
+                let cmp = compare_values(col_a, col_b).expect("unreachable panic");
                 if cmp != std::cmp::Ordering::Equal {
                     return cmp;
                 }
@@ -68,28 +66,5 @@ impl Engine for MergeTreeEngine {
         }
 
         Ok(columns)
-    }
-}
-
-fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
-    match (a, b) {
-        (Value::Int8(x), Value::Int8(y)) => x.cmp(y),
-        (Value::Int16(x), Value::Int16(y)) => x.cmp(y),
-        (Value::Int32(x), Value::Int32(y)) => x.cmp(y),
-        (Value::Int64(x), Value::Int64(y)) => x.cmp(y),
-        (Value::UInt8(x), Value::UInt8(y)) => x.cmp(y),
-        (Value::UInt16(x), Value::UInt16(y)) => x.cmp(y),
-        (Value::UInt32(x), Value::UInt32(y)) => x.cmp(y),
-        (Value::UInt64(x), Value::UInt64(y)) => x.cmp(y),
-        (Value::String(x), Value::String(y)) => x.cmp(y),
-        (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
-        (Value::Uuid(x), Value::Uuid(y)) => x.cmp(y),
-        (Value::Null, Value::Null) => std::cmp::Ordering::Equal,
-        (Value::Null, _) => std::cmp::Ordering::Greater,
-        (_, Value::Null) => std::cmp::Ordering::Less,
-        _ => panic!(
-            "Attempted to compare values of different types: {:?} vs {:?}",
-            a, b
-        ),
     }
 }

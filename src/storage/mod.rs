@@ -1,3 +1,4 @@
+mod compression;
 pub mod table_metadata;
 mod table_part;
 pub mod value;
@@ -5,13 +6,14 @@ pub mod value;
 use serde::{Deserialize, Serialize};
 use sqlparser::ast::{ObjectName, ObjectNamePart};
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::CONFIG;
 use crate::error::{Error, Result};
+use crate::storage::table_metadata::TABLE_METADATA_FILENAME;
 pub use crate::storage::table_metadata::{TableMetadata, TableSchema, TableSettings};
-pub use crate::storage::table_part::{TablePart, load_all_parts_on_startup};
+pub use crate::storage::table_part::{Mark, TablePart, TablePartInfo, load_all_parts_on_startup};
 pub use crate::storage::value::{Value, ValueType};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -27,10 +29,17 @@ pub struct ColumnDefConstraint {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub enum CompressionType {
+    None,
+    LZ4(u8),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ColumnDef {
     pub name: String,
     pub field_type: ValueType,
     pub constraints: Vec<ColumnDefConstraint>,
+    pub compression_type: CompressionType,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -41,10 +50,15 @@ pub struct Column {
 
 #[derive(Debug, Serialize)]
 pub struct OutputTable {
-    columns: Vec<Column>,
+    pub columns: Vec<Column>,
 }
 
 impl OutputTable {
+    /// Creates new OutputTable with provided columns.
+    pub fn new(columns: Vec<Column>) -> Self {
+        Self { columns }
+    }
+
     /// Builds a simple OK response table.
     pub fn build_ok() -> Self {
         Self {
@@ -53,6 +67,7 @@ impl OutputTable {
                     name: "OK".to_string(),
                     field_type: ValueType::String,
                     constraints: Vec::new(),
+                    compression_type: CompressionType::None,
                 },
                 data: vec![Value::String("OK".to_string())],
             }],
@@ -78,7 +93,7 @@ impl TableDef {
         CONFIG.get_db_dir().join(&self.database).join(&self.table)
     }
 
-    /// Checks if table exists by verifying database directory and .metadata file.
+    /// Checks if table exists by verifying database directory and `TABLE_METADATA_FILENAME` file.
     ///
     /// Returns: Ok or DatabaseNotFound/TableNotFound error
     pub fn exists_or_err(&self) -> Result<()> {
@@ -88,7 +103,7 @@ impl TableDef {
         }
 
         path.push(&self.table);
-        path.push(".metadata");
+        path.push(TABLE_METADATA_FILENAME);
 
         if !path.exists() {
             return Err(Error::TableNotFound);
@@ -139,4 +154,70 @@ pub fn get_unix_time() -> Result<u64> {
             .as_millis(),
     )
     .map_err(|_| Error::SystemTimeWentBackword)
+}
+
+/// Reads a specific file with crc32.
+///
+/// Returns: Column with all data or CouldNotReadData on failure
+pub fn read_file_with_crc<T>(path: &Path, magic_bytes: &[u8]) -> Result<T>
+// todo: add compression, default lz4
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let file_bytes = std::fs::read(path)
+        .map_err(|e| Error::CouldNotReadData(format!("Failed to read column file: {}", e)))?;
+
+    if file_bytes.len() <= magic_bytes.len() + 4 {
+        return Err(Error::CouldNotReadData("Column file too small".to_string()));
+    }
+
+    let file_magic_bytes = &file_bytes[0..magic_bytes.len()];
+    if file_magic_bytes != magic_bytes {
+        return Err(Error::CouldNotReadData(
+            "Invalid magic bytes in column file".to_string(),
+        ));
+    }
+
+    let data_bytes = &file_bytes[magic_bytes.len()..(file_bytes.len() - 4)];
+
+    let expected_crc = u32::from_le_bytes([
+        file_bytes[file_bytes.len() - 4],
+        file_bytes[file_bytes.len() - 3],
+        file_bytes[file_bytes.len() - 2],
+        file_bytes[file_bytes.len() - 1],
+    ]);
+
+    let actual_crc = crc32fast::hash(data_bytes);
+    if expected_crc != actual_crc {
+        return Err(Error::CouldNotReadData(
+            "CRC mismatch in column file".to_string(),
+        ));
+    }
+
+    let file = bincode::serde::decode_from_slice(data_bytes, bincode::config::standard())
+        .map(|x| x.0)
+        .map_err(|e| Error::CouldNotReadData(format!("Failed to deserialize column: {}", e)))?;
+
+    Ok(file)
+}
+
+/// Writes to a specific file with crc32.
+///
+/// Returns: Column with all data or CouldNotInsertData on failure
+pub fn write_file_with_crc<T>(data: &T, path: &PathBuf, magic_bytes: &[u8]) -> Result<()>
+where
+    T: Serialize,
+{
+    let mut bytes = Vec::from(magic_bytes);
+
+    let data_bytes = bincode::serde::encode_to_vec(data, bincode::config::standard())
+        .map_err(|e| Error::CouldNotInsertData(format!("Failed to serialize column: {}", e)))?;
+
+    let crc = crc32fast::hash(&data_bytes);
+
+    bytes.extend(data_bytes);
+    bytes.extend(crc.to_le_bytes());
+
+    std::fs::write(path, bytes)
+        .map_err(|e| Error::CouldNotInsertData(format!("Failed to write file: {}", e)))
 }

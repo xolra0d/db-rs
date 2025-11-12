@@ -153,3 +153,87 @@ impl LogicalPlan {
         Ok(LogicalPlan::Insert { table_def, columns })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlparser::ast::{Ident, ObjectName, ObjectNamePart};
+
+    fn build_table_name(db: &str, table: &str) -> ObjectName {
+        ObjectName(vec![
+            ObjectNamePart::Identifier(Ident::new(db.to_string())),
+            ObjectNamePart::Identifier(Ident::new(table.to_string())),
+        ])
+    }
+
+    #[test]
+    fn test_insert_validation_empty_columns() {
+        let insert = Insert {
+            or: None,
+            ignore: false,
+            into: true,
+            table: TableObject::TableName(build_table_name("db", "table")),
+            table_alias: None,
+            columns: vec![],
+            overwrite: false,
+            source: None,
+            partitioned: None,
+            after_columns: vec![],
+            on: None,
+            returning: None,
+            replace_into: false,
+            priority: None,
+            insert_alias: None,
+            has_table_keyword: false,
+            assignments: vec![],
+            settings: None,
+            format_clause: None,
+        };
+
+        let result = LogicalPlan::from_insert(&insert);
+        assert!(result.is_err());
+        match result {
+            Err(Error::NoColumnsSpecified) | Err(Error::TableNotFound) => {}
+            other => panic!(
+                "Expected NoColumnsSpecified or TableNotFound, got: {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn test_insert_validation_duplicate_columns() {
+        let insert = Insert {
+            or: None,
+            ignore: false,
+            into: true,
+            table: TableObject::TableName(build_table_name("db", "table")),
+            table_alias: None,
+            columns: vec![Ident::new("id".to_string()), Ident::new("id".to_string())],
+            overwrite: false,
+            source: None,
+            partitioned: None,
+            after_columns: vec![],
+            on: None,
+            returning: None,
+            replace_into: false,
+            priority: None,
+            insert_alias: None,
+            has_table_keyword: false,
+            assignments: vec![],
+            settings: None,
+            format_clause: None,
+        };
+
+        let result = LogicalPlan::from_insert(&insert);
+        assert!(result.is_err());
+        match result {
+            Err(Error::InvalidColumnName(msg)) => assert!(msg.contains("Duplicate")),
+            Err(Error::TableNotFound) => {}
+            other => panic!(
+                "Expected InvalidColumnName or TableNotFound, got: {:?}",
+                other
+            ),
+        }
+    }
+}

@@ -1,4 +1,4 @@
-use sqlparser::ast::Statement;
+use sqlparser::ast::{Expr, Statement};
 use sqlparser::dialect::ClickHouseDialect;
 use sqlparser::parser::Parser;
 
@@ -13,7 +13,9 @@ pub enum LogicalPlan {
     Skip,
 
     /// Create a database.
-    CreateDatabase { name: String },
+    CreateDatabase {
+        name: String,
+    },
 
     /// Create a table.
     CreateTable {
@@ -21,12 +23,27 @@ pub enum LogicalPlan {
         columns: Vec<ColumnDef>,
         settings: TableSettings,
         order_by: Vec<ColumnDef>,
+        primary_key: Vec<ColumnDef>,
     },
 
     /// Insert values.
     Insert {
         table_def: TableDef,
         columns: Vec<Column>,
+    },
+
+    Scan {
+        table: TableDef,
+    },
+
+    Projection {
+        columns: Vec<ColumnDef>,
+        plan: Box<LogicalPlan>,
+    },
+
+    Filter {
+        expr: Box<Expr>,
+        plan: Box<LogicalPlan>,
     },
 }
 
@@ -52,6 +69,7 @@ impl TryFrom<&str> for LogicalPlan {
                 ..
             } => Self::from_create_database(db_name, *if_not_exists),
             Statement::Insert(insert) => Self::from_insert(insert),
+            Statement::Query(query) => Self::from_query(query),
             _ => Err(Error::UnsupportedCommand(statement.to_string())),
         }
     }
@@ -79,12 +97,20 @@ pub enum PhysicalPlan {
         columns: Vec<ColumnDef>,
         settings: TableSettings,
         order_by: Vec<ColumnDef>,
+        primary_key: Vec<ColumnDef>,
     },
 
     /// Insert values.
     Insert {
         table_def: TableDef,
         columns: Vec<Column>,
+    },
+
+    /// Select columns from table.
+    Select {
+        table_def: TableDef,
+        columns: Vec<ColumnDef>,
+        filter: Option<Box<Expr>>,
     },
 }
 
@@ -98,13 +124,35 @@ impl From<LogicalPlan> for PhysicalPlan {
                 columns,
                 settings,
                 order_by,
+                primary_key,
             } => Self::CreateTable {
                 name,
                 columns,
                 settings,
                 order_by,
+                primary_key,
             },
             LogicalPlan::Insert { table_def, columns } => Self::Insert { table_def, columns },
+            LogicalPlan::Projection { columns, plan } => match *plan {
+                LogicalPlan::Filter { expr, plan } => {
+                    if let LogicalPlan::Scan { table } = *plan {
+                        Self::Select {
+                            table_def: table,
+                            columns,
+                            filter: Some(expr),
+                        }
+                    } else {
+                        unimplemented!("Filter without Scan not yet supported")
+                    }
+                }
+                LogicalPlan::Scan { table } => Self::Select {
+                    table_def: table,
+                    columns,
+                    filter: None,
+                },
+                _ => unimplemented!("Projection without Scan not yet supported"),
+            },
+            _ => unimplemented!("Projection without Scan not yet supported"),
         }
     }
 }

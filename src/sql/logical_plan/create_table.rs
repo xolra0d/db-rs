@@ -58,11 +58,13 @@ impl LogicalPlan {
             let field_type = ValueType::try_from(&table_column.data_type)?;
 
             let constraints = Self::parse_column_constraints(&table_column.options)?;
+            let compression_type = field_type.get_optimal_compression();
 
             columns.push(ColumnDef {
                 name: column_name.clone(),
                 field_type,
                 constraints,
+                compression_type,
             });
         }
 
@@ -73,11 +75,14 @@ impl LogicalPlan {
             &columns.iter().collect::<Vec<_>>(),
         )?;
 
+        let primary_key = order_by.clone(); // todo: remove later
+
         Ok(Self::CreateTable {
             name: table_def,
             columns,
             settings,
             order_by,
+            primary_key,
         })
     }
 
@@ -212,5 +217,135 @@ impl LogicalPlan {
         }
 
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlparser::ast::Ident;
+
+    #[test]
+    fn test_parse_column_constraints_valid() {
+        let not_null_option = ColumnOptionDef {
+            name: None,
+            option: ColumnOption::NotNull,
+        };
+        let null_option = ColumnOptionDef {
+            name: None,
+            option: ColumnOption::Null,
+        };
+
+        let result = LogicalPlan::parse_column_constraints(&[not_null_option]);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 1);
+
+        let result = LogicalPlan::parse_column_constraints(&[null_option]);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 1);
+
+        let result = LogicalPlan::parse_column_constraints(&[]);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_parse_column_constraints_invalid() {
+        let not_null_option = ColumnOptionDef {
+            name: None,
+            option: ColumnOption::NotNull,
+        };
+        let null_option = ColumnOptionDef {
+            name: None,
+            option: ColumnOption::Null,
+        };
+
+        let result = LogicalPlan::parse_column_constraints(&[not_null_option, null_option]);
+        assert!(result.is_err());
+
+        let unique_option = ColumnOptionDef {
+            name: None,
+            option: ColumnOption::Unique {
+                is_primary: false,
+                characteristics: None,
+            },
+        };
+        let result = LogicalPlan::parse_column_constraints(&[unique_option]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_order_by_invalid() {
+        let col1 = ColumnDef {
+            name: "id".to_string(),
+            field_type: ValueType::UInt32,
+            constraints: vec![],
+            compression_type: crate::storage::CompressionType::None,
+        };
+        let col2 = ColumnDef {
+            name: "name".to_string(),
+            field_type: ValueType::String,
+            constraints: vec![],
+            compression_type: crate::storage::CompressionType::None,
+        };
+        let columns = vec![&col1, &col2];
+
+        let result = LogicalPlan::parse_order_by(None, &columns);
+        assert!(result.is_err());
+
+        let empty_order_by = OneOrManyWithParens::Many(vec![]);
+        let result = LogicalPlan::parse_order_by(Some(&empty_order_by), &columns);
+        assert!(result.is_err());
+
+        let invalid_column = OneOrManyWithParens::Many(vec![Expr::Identifier(Ident::new(
+            "nonexistent".to_string(),
+        ))]);
+        let result = LogicalPlan::parse_order_by(Some(&invalid_column), &columns);
+        assert!(result.is_err());
+
+        let duplicate = OneOrManyWithParens::Many(vec![
+            Expr::Identifier(Ident::new("id".to_string())),
+            Expr::Identifier(Ident::new("id".to_string())),
+        ]);
+        let result = LogicalPlan::parse_order_by(Some(&duplicate), &columns);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_order_by_valid() {
+        let col1 = ColumnDef {
+            name: "id".to_string(),
+            field_type: ValueType::UInt32,
+            constraints: vec![],
+            compression_type: crate::storage::CompressionType::None,
+        };
+        let col2 = ColumnDef {
+            name: "name".to_string(),
+            field_type: ValueType::String,
+            constraints: vec![],
+            compression_type: crate::storage::CompressionType::None,
+        };
+        let columns = vec![&col1, &col2];
+
+        let order_by =
+            OneOrManyWithParens::Many(vec![Expr::Identifier(Ident::new("id".to_string()))]);
+        let result = LogicalPlan::parse_order_by(Some(&order_by), &columns);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 1);
+
+        let order_by = OneOrManyWithParens::Many(vec![
+            Expr::Identifier(Ident::new("id".to_string())),
+            Expr::Identifier(Ident::new("name".to_string())),
+        ]);
+        let result = LogicalPlan::parse_order_by(Some(&order_by), &columns);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_parse_table_options_default() {
+        let result = LogicalPlan::parse_table_options(&CreateTableOptions::None);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().engine, EngineName::MergeTree);
     }
 }
