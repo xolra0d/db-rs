@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 use sqlparser::ast::{DataType as SQLDatatype, Value as SQLValue};
+use std::cmp::Ordering;
 use uuid::Uuid;
 
-use crate::error::Error;
+use crate::error::{Error, Result};
 
 /// Represents a parsed value in our custom protocol
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -25,7 +26,7 @@ pub enum Value {
 
 impl TryFrom<(SQLValue, &ValueType)> for Value {
     type Error = Error;
-    fn try_from(value: (SQLValue, &ValueType)) -> Result<Self, Self::Error> {
+    fn try_from(value: (SQLValue, &ValueType)) -> Result<Self> {
         let (sql_value, value_type) = value;
 
         match sql_value {
@@ -93,7 +94,7 @@ pub enum ValueType {
 impl TryFrom<&SQLDatatype> for ValueType {
     type Error = Error;
 
-    fn try_from(value: &SQLDatatype) -> Result<Self, Self::Error> {
+    fn try_from(value: &SQLDatatype) -> Result<Self> {
         match value {
             SQLDatatype::String(_) => Ok(Self::String),
             SQLDatatype::Uuid => Ok(Self::Uuid),
@@ -129,11 +130,9 @@ impl Value {
         }
     }
 }
-use std::cmp::Ordering;
 /// Compares two values and returns their ordering.
-pub fn compare_values(left: &Value, right: &Value) -> crate::error::Result<Ordering> {
+pub fn compare_values(left: &Value, right: &Value) -> Result<Ordering> {
     match (left, right) {
-        // Non-numeric exact matches
         (Value::String(l), Value::String(r)) => Ok(l.cmp(r)),
         (Value::Bool(l), Value::Bool(r)) => Ok(l.cmp(r)),
         (Value::Uuid(l), Value::Uuid(r)) => Ok(l.cmp(r)),
@@ -184,7 +183,7 @@ fn to_u64(val: &Value) -> u64 {
     }
 }
 
-fn compare_signed_unsigned(signed: i64, unsigned: u64) -> crate::error::Result<Ordering> {
+fn compare_signed_unsigned(signed: i64, unsigned: u64) -> Result<Ordering> {
     if signed < 0 || unsigned > i64::MAX as u64 {
         Ok(Ordering::Less)
     } else {

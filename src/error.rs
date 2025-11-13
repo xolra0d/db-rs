@@ -23,10 +23,8 @@ pub enum Error {
     TableAlreadyExists,
 
     // mod sql
-    #[display("Couldn't parse SQL.")]
-    SqlToAstConversion,
-    #[display("No statement provided")]
-    EmptyStatement,
+    #[display("Couldn't parse SQL: {_0}")]
+    SqlToAstConversion(String),
     #[display("Unsupported command: {_0}.")]
     UnsupportedCommand(String),
     #[display("Unsupported column name: {_0}.")]
@@ -37,6 +35,10 @@ pub enum Error {
     UnsupportedTableOption(String),
     #[display("Invalid ORDER BY.")]
     InvalidOrderBy,
+    #[display("Invalid PRIMARY KEY: {_0}")]
+    InvalidPrimaryKey(String),
+    #[display("Invalid pair of ORDER BY and PRIMARY KEY. PRIMARY KEY should be prefix of ORDER BY")]
+    InvalidOrderByPrimaryKeyPair,
     #[display("Invalid table name.")]
     InvalidTableName,
     #[display("No columns specified.")]

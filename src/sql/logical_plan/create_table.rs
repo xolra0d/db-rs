@@ -1,6 +1,6 @@
 use sqlparser::ast::{
-    ColumnOption, ColumnOptionDef, CreateTable, CreateTableOptions, Expr, OneOrManyWithParens,
-    SqlOption,
+    ColumnOption, ColumnOptionDef, CreateTable, CreateTableOptions, Expr, Ident,
+    OneOrManyWithParens, SqlOption,
 };
 use std::collections::HashSet;
 
@@ -70,12 +70,36 @@ impl LogicalPlan {
 
         let settings = Self::parse_table_options(&create_table.table_options)?;
 
-        let order_by = Self::parse_order_by(
-            create_table.order_by.as_ref(),
-            &columns.iter().collect::<Vec<_>>(),
-        )?;
+        let column_defs = columns.iter().collect::<Vec<_>>();
+        let (order_by, primary_key) = match (&create_table.order_by, &create_table.primary_key) {
+            (Some(order_by), Some(primary_key)) => {
+                let order_by = Self::parse_order_by(order_by, &column_defs)?;
+                let primary_key = Self::parse_primary_key(primary_key, &column_defs)?;
 
-        let primary_key = order_by.clone(); // todo: remove later
+                if primary_key.len() > order_by.len() {
+                    return Err(Error::InvalidOrderByPrimaryKeyPair);
+                }
+
+                for (column_primary, column_order_by) in primary_key.iter().zip(order_by.iter()) {
+                    if column_primary != column_order_by {
+                        return Err(Error::InvalidOrderByPrimaryKeyPair);
+                    }
+                }
+
+                (order_by, primary_key)
+            }
+            (Some(order_by), None) => {
+                let order_by = Self::parse_order_by(order_by, &column_defs)?;
+                let primary_key = order_by.clone();
+                (order_by, primary_key)
+            }
+            (None, Some(primary_key)) => {
+                let primary_key = Self::parse_primary_key(primary_key, &column_defs)?;
+                let order_by = primary_key.clone();
+                (order_by, primary_key)
+            }
+            (None, None) => (vec![columns[0].clone()], vec![columns[0].clone()]),
+        };
 
         Ok(Self::CreateTable {
             name: table_def,
@@ -135,11 +159,9 @@ impl LogicalPlan {
     ///     4. If column, not found in all columns, is found in ORDER BY: InvalidOrderBy.
     ///     5. If the same column is added: InvalidOrderBy.
     fn parse_order_by(
-        options: Option<&OneOrManyWithParens<Expr>>,
+        order_by_params: &OneOrManyWithParens<Expr>,
         columns: &[&ColumnDef],
     ) -> Result<Vec<ColumnDef>> {
-        let order_by_params: &OneOrManyWithParens<Expr> =
-            *options.as_ref().ok_or(Error::InvalidOrderBy)?;
         if order_by_params.is_empty() {
             return Err(Error::OrderByColumnsNotFound);
         }
@@ -165,6 +187,58 @@ impl LogicalPlan {
             order_by.push((*column_def).clone());
         }
         Ok(order_by)
+    }
+
+    /// Tries to parse PRIMARY KEY column names.
+    ///
+    /// Returns
+    ///   * Ok when:
+    ///     1. All columns are unique, exist in the pool of ALL columns: Vec<ColumnDef>
+    ///   * Error when:
+    ///     1. If no ORDER BY was provided: InvalidOrderBy.
+    ///     2. If ORDER BY is empty: InvalidOrderBy.
+    ///     3. If column name is not an identifier: InvalidOrderBy.
+    ///     4. If column, not found in all columns, is found in ORDER BY: InvalidOrderBy.
+    ///     5. If the same column is added: InvalidOrderBy.
+    fn parse_primary_key(primary_key: &Expr, columns: &[&ColumnDef]) -> Result<Vec<ColumnDef>> {
+        fn parse_ident(expr: &Ident, columns: &[&ColumnDef]) -> Result<ColumnDef> {
+            if let Some(column_def) = columns.iter().find(|col| col.name == expr.value) {
+                Ok((*column_def).clone())
+            } else {
+                Err(Error::InvalidPrimaryKey(
+                    "Column specified was not found".to_string(),
+                ))
+            }
+        }
+
+        match primary_key {
+            Expr::Identifier(primary_key) => parse_ident(primary_key, columns).map(|x| vec![x]),
+            Expr::Tuple(primary_keys) => {
+                let mut primary_key = Vec::with_capacity(primary_keys.len());
+                for key in primary_keys {
+                    let Expr::Identifier(ident) = key else {
+                        return Err(Error::InvalidPrimaryKey(format!(
+                            "Invalid specifier: {key}"
+                        )));
+                    };
+                    primary_key.push(parse_ident(&ident, columns)?);
+                }
+
+                Ok(primary_key)
+            }
+            Expr::Nested(primary_key) => { // Added, because `sqlparser-rs` believes single element tuples are `Expr::Nested`
+                if let Expr::Identifier(primary_key) = primary_key.as_ref() {
+                    parse_ident(primary_key, columns).map(|x| vec![x])
+                } else {
+                    Err(Error::InvalidPrimaryKey(
+                        "Nested primary keys are unsupported".to_string(),
+                    ))
+                }
+            }
+            _ => Err(Error::InvalidPrimaryKey(format!(
+                "Invalid primary key: {primary_key}"
+            ))),
+        }
     }
 
     /// Tries to parse column constraints for each column.
@@ -290,24 +364,21 @@ mod tests {
         };
         let columns = vec![&col1, &col2];
 
-        let result = LogicalPlan::parse_order_by(None, &columns);
-        assert!(result.is_err());
-
         let empty_order_by = OneOrManyWithParens::Many(vec![]);
-        let result = LogicalPlan::parse_order_by(Some(&empty_order_by), &columns);
+        let result = LogicalPlan::parse_order_by(&empty_order_by, &columns);
         assert!(result.is_err());
 
         let invalid_column = OneOrManyWithParens::Many(vec![Expr::Identifier(Ident::new(
             "nonexistent".to_string(),
         ))]);
-        let result = LogicalPlan::parse_order_by(Some(&invalid_column), &columns);
+        let result = LogicalPlan::parse_order_by(&invalid_column, &columns);
         assert!(result.is_err());
 
         let duplicate = OneOrManyWithParens::Many(vec![
             Expr::Identifier(Ident::new("id".to_string())),
             Expr::Identifier(Ident::new("id".to_string())),
         ]);
-        let result = LogicalPlan::parse_order_by(Some(&duplicate), &columns);
+        let result = LogicalPlan::parse_order_by(&duplicate, &columns);
         assert!(result.is_err());
     }
 
@@ -329,7 +400,7 @@ mod tests {
 
         let order_by =
             OneOrManyWithParens::Many(vec![Expr::Identifier(Ident::new("id".to_string()))]);
-        let result = LogicalPlan::parse_order_by(Some(&order_by), &columns);
+        let result = LogicalPlan::parse_order_by(&order_by, &columns);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().len(), 1);
 
@@ -337,7 +408,7 @@ mod tests {
             Expr::Identifier(Ident::new("id".to_string())),
             Expr::Identifier(Ident::new("name".to_string())),
         ]);
-        let result = LogicalPlan::parse_order_by(Some(&order_by), &columns);
+        let result = LogicalPlan::parse_order_by(&order_by, &columns);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().len(), 2);
     }

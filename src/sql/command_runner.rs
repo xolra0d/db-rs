@@ -11,8 +11,6 @@ impl CommandRunner {
     pub fn execute_command(command: &str) -> Result<OutputTable> {
         let logical_plan = LogicalPlan::try_from(command)?;
 
-        log::info!("Logical plan: {:?}", logical_plan);
-
         let logical_plan = logical_plan.optimize_self();
 
         let physical_plan = PhysicalPlan::from(logical_plan);

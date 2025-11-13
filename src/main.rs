@@ -14,30 +14,29 @@ use tokio::sync::Semaphore;
 use tokio_util::codec::Decoder as _;
 
 use crate::config::CONFIG;
-use crate::error::{Error, Result};
+use crate::error::Error;
 use crate::sql::CommandRunner;
 use crate::tcp_io_parser::Parser;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), String> {
     env_logger::Builder::from_default_env()
         .filter_level(CONFIG.get_log_level())
         .init();
 
     storage::load_all_parts_on_startup(CONFIG.get_db_dir())
-        .unwrap_or_else(|e| panic!("Failed to load parts on startup: {:?}", e));
+        .map_err(|error| format!("Failed to load parts on startup: {error:?}"))?;
 
     let max_conn = Arc::new(Semaphore::new(CONFIG.get_max_connections()));
 
     let listener = TcpListener::bind(&CONFIG.get_tcp_socket_addr())
         .await
-        .unwrap_or_else(|error| {
-            panic!(
-                "Failed to bind to {}: {}.",
-                CONFIG.get_tcp_socket_addr(),
-                error
+        .map_err(|error| {
+            format!(
+                "Failed to bind to {}: {error}.",
+                CONFIG.get_tcp_socket_addr()
             )
-        });
+        })?;
 
     info!("TCP server listening on {}", CONFIG.get_tcp_socket_addr());
     info!("Database directory: {}", CONFIG.get_db_dir().display());
@@ -45,8 +44,8 @@ async fn main() {
 
     loop {
         let Ok(connection_permit) = Arc::clone(&max_conn).acquire_owned().await else {
-            // semaphore is closed? currently unimplemented
-            break;
+            // currently unimplemented
+            return Err("Semaphore closed unexpectedly.".to_string());
         };
         match listener.accept().await {
             Ok((mut socket, addr)) => {
@@ -63,7 +62,7 @@ async fn main() {
     }
 }
 
-async fn handle_connection(socket: &mut TcpStream) -> Result<()> {
+async fn handle_connection(socket: &mut TcpStream) -> Result<(), Error> {
     // using tokio_util `Decoder, Encoder` traits to receive and send bytes
     // link: https://docs.rs/tokio-util/latest/tokio_util/codec/index.html
     let mut transport = Parser.framed(socket);

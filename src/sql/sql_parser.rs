@@ -57,20 +57,26 @@ impl TryFrom<&str> for LogicalPlan {
 
     fn try_from(sql: &str) -> Result<Self> {
         let dialect = ClickHouseDialect {};
-        let ast = Parser::parse_sql(&dialect, sql).map_err(|_| Error::SqlToAstConversion)?;
+        let ast = Parser::parse_sql(&dialect, sql)
+            .map_err(|error| Error::SqlToAstConversion(error.to_string()))?;
+        if ast.len() != 1 {
+            return Err(Error::SqlToAstConversion(
+                "Currently support only statement per request".to_string(),
+            ));
+        }
 
-        let statement = ast.first().ok_or(Error::EmptyStatement)?;
-
-        match statement {
-            Statement::CreateTable(create_table) => Self::from_create_table(create_table),
+        match &ast[0] {
             Statement::CreateDatabase {
                 db_name,
                 if_not_exists,
                 ..
             } => Self::from_create_database(db_name, *if_not_exists),
+            Statement::CreateTable(create_table) => Self::from_create_table(create_table),
+
             Statement::Insert(insert) => Self::from_insert(insert),
             Statement::Query(query) => Self::from_query(query),
-            _ => Err(Error::UnsupportedCommand(statement.to_string())),
+
+            statement => Err(Error::UnsupportedCommand(statement.to_string())),
         }
     }
 }

@@ -158,9 +158,8 @@ pub fn get_unix_time() -> Result<u64> {
 
 /// Reads a specific file with crc32.
 ///
-/// Returns: Column with all data or CouldNotReadData on failure
+/// Returns: T or CouldNotReadData on failure
 pub fn read_file_with_crc<T>(path: &Path, magic_bytes: &[u8]) -> Result<T>
-// todo: add compression, default lz4
 where
     T: for<'de> Deserialize<'de>,
 {
@@ -203,7 +202,7 @@ where
 
 /// Writes to a specific file with crc32.
 ///
-/// Returns: Column with all data or CouldNotInsertData on failure
+/// Returns: () or CouldNotInsertData on failure
 pub fn write_file_with_crc<T>(data: &T, path: &PathBuf, magic_bytes: &[u8]) -> Result<()>
 where
     T: Serialize,

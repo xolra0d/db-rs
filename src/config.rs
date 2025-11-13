@@ -1,10 +1,25 @@
 use serde::Deserialize;
 use std::io::ErrorKind;
 use std::net::SocketAddrV4;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Global static to access server configuration
 pub static CONFIG: std::sync::LazyLock<Config> = std::sync::LazyLock::new(Config::build);
+const CONFIG_FILENAME: &str = "touch_config.toml";
+const DEFAULT_CONFIG_STR: &str = r#"# Storage directory
+storage_directory = "db_files/"
+
+# TCP socket to accept connections
+tcp_socket = "127.0.0.1:7070"
+
+# Max connection at a time
+max_connections = 100
+
+# Allowed values:
+# - 1 => Info
+# - 2 => Warn
+# - 3 => Error
+log_level = 1"#;
 
 /// Server configuration
 #[derive(Debug, Deserialize)]
@@ -84,9 +99,16 @@ impl Config {
     /// 2. When config file does not exist
     /// 2. When config file is invalid toml
     pub fn build() -> Self {
-        let config_path = std::env::var("CONFIG_PATH").unwrap_or("touch_config.toml".to_string());
+        let config_path = &std::env::var("CONFIG_PATH").unwrap_or(CONFIG_FILENAME.to_string());
+        let config_path = Path::new(config_path);
+
+        if !config_path.exists() {
+            std::fs::write(config_path, DEFAULT_CONFIG_STR)
+                .expect("Couldn't write default config file");
+        }
+
         let config_file = std::fs::read_to_string(config_path).expect("Couldn't read config file");
-        let raw_config: Self = toml::from_str(config_file.as_str()).expect("Invalid config file");
+        let raw_config: Self = toml::from_str(&config_file).expect("Invalid config file");
 
         Self::ensure_directory_exists(&raw_config.storage_directory);
 

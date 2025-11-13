@@ -13,12 +13,12 @@ use crate::storage::{Column, ColumnDef, OutputTable, TableDef, Value};
 impl CommandRunner {
     /// Checks if a mark should be read based on the filter expression.
     /// Returns true if the mark might contain matching rows.
-    fn should_read_mark(expr: &Expr, mark: &Mark, order_by_columns: &[ColumnDef]) -> Result<bool> {
+    fn should_read_mark(expr: &Expr, mark: &Mark, primary_key_columns: &[ColumnDef]) -> Result<bool> {
         match expr {
             Expr::BinaryOp { left, op, right } => {
                 if let (Expr::Identifier(ident), Expr::Value(val)) = (left.as_ref(), right.as_ref())
                     && let Some(order_idx) =
-                        order_by_columns.iter().position(|c| c.name == ident.value)
+                        primary_key_columns.iter().position(|c| c.name == ident.value)
                     && order_idx < mark.index.len()
                 {
                     let mark_value = &mark.index[order_idx];
@@ -26,7 +26,6 @@ impl CommandRunner {
 
                     return match op {
                         BinaryOperator::Eq => {
-                            // For equality, skip marks where min > value (all rows are too large)
                             Ok(compare_values(mark_value, &filter_value)?
                                 != std::cmp::Ordering::Greater)
                         }
@@ -34,18 +33,14 @@ impl CommandRunner {
                             "Currently unsupported.".to_string(),
                         )),
                         BinaryOperator::Lt => {
-                            // For <, skip marks where min >= value (all rows are too large or equal)
                             Ok(compare_values(mark_value, &filter_value)?
                                 == std::cmp::Ordering::Less)
                         }
                         BinaryOperator::LtEq => {
-                            // For <=, skip marks where min > value (all rows are too large)
                             Ok(compare_values(mark_value, &filter_value)?
                                 != std::cmp::Ordering::Greater)
                         }
                         BinaryOperator::Gt | BinaryOperator::GtEq => {
-                            // For > and >=, we can't skip any marks since we only have min values
-                            // and any mark could contain rows satisfying the condition
                             Ok(true)
                         }
                         _ => Ok(true),
@@ -194,7 +189,7 @@ impl CommandRunner {
                                 match Self::should_read_mark(
                                     filter_expr,
                                     mark,
-                                    &table_config.metadata.schema.order_by,
+                                    &table_config.metadata.schema.primary_key,
                                 )
                                 .ok()?
                                 {
@@ -228,7 +223,7 @@ impl CommandRunner {
                                 Self::should_read_mark(
                                     filter_expr,
                                     mark,
-                                    &table_config.metadata.schema.order_by,
+                                    &table_config.metadata.schema.primary_key,
                                 )
                                 .unwrap_or(true)
                             })

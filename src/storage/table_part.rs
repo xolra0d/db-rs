@@ -148,7 +148,7 @@ impl TablePart {
 
         let marks = generate_indexes(
             &data,
-            &table_metadata.schema.order_by,
+            &table_metadata.schema.primary_key,
             table_metadata.settings.index_granularity,
         );
         let row_count = data[0].data.len() as u64;
