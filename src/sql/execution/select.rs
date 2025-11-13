@@ -13,22 +13,25 @@ use crate::storage::{Column, ColumnDef, OutputTable, TableDef, Value};
 impl CommandRunner {
     /// Checks if a mark should be read based on the filter expression.
     /// Returns true if the mark might contain matching rows.
-    fn should_read_mark(expr: &Expr, mark: &Mark, primary_key_columns: &[ColumnDef]) -> Result<bool> {
+    fn should_read_mark(
+        expr: &Expr,
+        mark: &Mark,
+        primary_key_columns: &[ColumnDef],
+    ) -> Result<bool> {
         match expr {
             Expr::BinaryOp { left, op, right } => {
                 if let (Expr::Identifier(ident), Expr::Value(val)) = (left.as_ref(), right.as_ref())
-                    && let Some(order_idx) =
-                        primary_key_columns.iter().position(|c| c.name == ident.value)
+                    && let Some(order_idx) = primary_key_columns
+                        .iter()
+                        .position(|c| c.name == ident.value)
                     && order_idx < mark.index.len()
                 {
                     let mark_value = &mark.index[order_idx];
                     let filter_value = Self::sql_value_to_value(&val.value)?;
 
                     return match op {
-                        BinaryOperator::Eq => {
-                            Ok(compare_values(mark_value, &filter_value)?
-                                != std::cmp::Ordering::Greater)
-                        }
+                        BinaryOperator::Eq => Ok(compare_values(mark_value, &filter_value)?
+                            != std::cmp::Ordering::Greater),
                         BinaryOperator::NotEq => Err(Error::UnsupportedCommand(
                             "Currently unsupported.".to_string(),
                         )),
@@ -36,13 +39,9 @@ impl CommandRunner {
                             Ok(compare_values(mark_value, &filter_value)?
                                 == std::cmp::Ordering::Less)
                         }
-                        BinaryOperator::LtEq => {
-                            Ok(compare_values(mark_value, &filter_value)?
-                                != std::cmp::Ordering::Greater)
-                        }
-                        BinaryOperator::Gt | BinaryOperator::GtEq => {
-                            Ok(true)
-                        }
+                        BinaryOperator::LtEq => Ok(compare_values(mark_value, &filter_value)?
+                            != std::cmp::Ordering::Greater),
+                        BinaryOperator::Gt | BinaryOperator::GtEq => Ok(true),
                         _ => Ok(true),
                     };
                 }

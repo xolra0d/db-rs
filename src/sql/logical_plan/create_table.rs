@@ -221,12 +221,13 @@ impl LogicalPlan {
                             "Invalid specifier: {key}"
                         )));
                     };
-                    primary_key.push(parse_ident(&ident, columns)?);
+                    primary_key.push(parse_ident(ident, columns)?);
                 }
 
                 Ok(primary_key)
             }
-            Expr::Nested(primary_key) => { // Added, because `sqlparser-rs` believes single element tuples are `Expr::Nested`
+            Expr::Nested(primary_key) => {
+                // Added, because `sqlparser-rs` believes single element tuples are `Expr::Nested`
                 if let Expr::Identifier(primary_key) = primary_key.as_ref() {
                     parse_ident(primary_key, columns).map(|x| vec![x])
                 } else {
