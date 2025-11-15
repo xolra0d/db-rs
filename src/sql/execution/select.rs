@@ -1,4 +1,3 @@
-use scc::Guard;
 use sqlparser::ast::{BinaryOperator, Expr, Value as SQLValue};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -30,8 +29,10 @@ impl CommandRunner {
                     let filter_value = Self::sql_value_to_value(&val.value)?;
 
                     return match op {
-                        BinaryOperator::Eq => Ok(compare_values(mark_value, &filter_value)?
-                            != std::cmp::Ordering::Greater),
+                        BinaryOperator::Eq | BinaryOperator::LtEq => {
+                            Ok(compare_values(mark_value, &filter_value)?
+                                != std::cmp::Ordering::Greater)
+                        }
                         BinaryOperator::NotEq => Err(Error::UnsupportedCommand(
                             "Currently unsupported.".to_string(),
                         )),
@@ -39,9 +40,7 @@ impl CommandRunner {
                             Ok(compare_values(mark_value, &filter_value)?
                                 == std::cmp::Ordering::Less)
                         }
-                        BinaryOperator::LtEq => Ok(compare_values(mark_value, &filter_value)?
-                            != std::cmp::Ordering::Greater),
-                        BinaryOperator::Gt | BinaryOperator::GtEq => Ok(true),
+                        // BinaryOperator::Gt | BinaryOperator::GtEq => Ok(true),
                         _ => Ok(true),
                     };
                 }
@@ -107,8 +106,7 @@ impl CommandRunner {
                         Ok(compare_values(&left_val, &right_val)? != std::cmp::Ordering::Less)
                     }
                     _ => Err(Error::UnsupportedCommand(format!(
-                        "Unsupported operator: {:?}",
-                        op
+                        "Unsupported operator: {op:?}",
                     ))),
                 }
             }
@@ -146,15 +144,14 @@ impl CommandRunner {
     /// Reads requested columns from each part and merges them into result.
     ///
     /// Returns:
-    ///   * Ok: OutputTable with selected columns
-    ///   * Error: TableNotFound or CouldNotReadData on read failure
+    ///   * Ok: `OutputTable` with selected columns
+    ///   * Error: `TableNotFound` or `CouldNotReadData` on read failure
     pub fn select(
         table_def: TableDef,
         column_defs: Vec<ColumnDef>,
         filter: Option<Box<Expr>>,
     ) -> Result<OutputTable> {
-        let guard = Guard::new();
-        let Some(table_config) = TABLE_DATA.peek(&table_def, &guard) else {
+        let Some(table_config) = TABLE_DATA.get(&table_def) else {
             return Err(Error::TableNotFound);
         };
 
@@ -185,15 +182,16 @@ impl CommandRunner {
                             .marks
                             .iter()
                             .filter_map(|mark| {
-                                match Self::should_read_mark(
+                                if Self::should_read_mark(
                                     filter_expr,
                                     mark,
                                     &table_config.metadata.schema.primary_key,
                                 )
                                 .ok()?
                                 {
-                                    true => mark.info.get(col_idx).cloned(),
-                                    false => None,
+                                    mark.info.get(col_idx).cloned()
+                                } else {
+                                    None
                                 }
                             })
                             .collect()
@@ -249,11 +247,7 @@ impl CommandRunner {
         }
 
         if let Some(filter_expr) = filter {
-            let row_count = column_map
-                .values()
-                .next()
-                .map(|c| c.data.len())
-                .unwrap_or(0);
+            let row_count = column_map.values().next().map_or(0, |c| c.data.len());
             let mut keep_rows = Vec::with_capacity(row_count);
 
             for row_idx in 0..row_count {

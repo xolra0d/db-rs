@@ -47,7 +47,7 @@ pub enum LogicalPlan {
     },
 }
 
-/// Tries to convert SQL to LogicalPlan by using Datafusion SQLParser
+/// Tries to convert SQL to `LogicalPlan` by using Datafusion `SQLParser`
 /// Currently supported commands
 ///   1. `CREATE DATABASE`
 ///   2. `CREATE TABLE`

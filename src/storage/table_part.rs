@@ -50,14 +50,14 @@ impl TablePartInfo {
 
     /// Reads and decompresses a column from disk using granule-based storage.
     ///
-    /// Reads specified granules according to MarkInfo slice, decompresses them, and combines into a Column.
+    /// Reads specified granules according to `MarkInfo` slice, decompresses them, and combines into a Column.
     ///
     /// Args:
-    ///   * table_def: Table definition for path resolution
-    ///   * column_def: Column to read
-    ///   * mark_infos: Slice of MarkInfo for granules to read (selective reading)
+    ///   * `table_def`: Table definition for path resolution
+    ///   * `column_def`: Column to read
+    ///   * `mark_infos`: Slice of `MarkInfo` for granules to read (selective reading)
     ///
-    /// Returns: Column with data from specified granules or CouldNotReadData on failure
+    /// Returns: Column with data from specified granules or `CouldNotReadData` on failure
     pub fn read_column(
         &self,
         table_def: &TableDef,
@@ -67,7 +67,7 @@ impl TablePartInfo {
         let column_path = self.get_column_path(table_def, column_def);
 
         let file_bytes = std::fs::read(&column_path)
-            .map_err(|e| Error::CouldNotReadData(format!("Failed to read column file: {}", e)))?;
+            .map_err(|e| Error::CouldNotReadData(format!("Failed to read column file: {e}")))?;
 
         if file_bytes.len() <= MAGIC_BYTES_COLUMN.len() + 4 {
             return Err(Error::CouldNotReadData("Column file too small".to_string()));
@@ -103,14 +103,16 @@ impl TablePartInfo {
             let end = (mark_info.end as usize) - MAGIC_BYTES_COLUMN.len();
             let granule_compressed_bytes = &data_bytes[start..end];
 
-            let granule_bytes =
-                decompress_bytes(granule_compressed_bytes, column_def.field_type.clone())?;
+            let granule_bytes = decompress_bytes(
+                granule_compressed_bytes,
+                &column_def.field_type.get_optimal_compression(),
+            )?;
 
             let granule_values: Vec<Value> =
                 bincode::serde::decode_from_slice(&granule_bytes, bincode::config::standard())
                     .map(|x| x.0)
                     .map_err(|e| {
-                        Error::CouldNotReadData(format!("Failed to deserialize granule: {}", e))
+                        Error::CouldNotReadData(format!("Failed to deserialize granule: {e}"))
                     })?;
 
             all_values.extend(granule_values);
@@ -134,22 +136,33 @@ impl TablePart {
     /// Creates a new table part with generated UUID name and indexes.
     ///
     /// Orders columns according to engine requirements and generates primary indexes
-    /// for ORDER BY columns with INDEX_GRANULARITY.
+    /// for ORDER BY columns.
     ///
-    /// Returns: (TablePart, ordered columns) or engine error
-    pub fn try_new(table_metadata: &TableMetadata, columns: Vec<Column>) -> Result<Self> {
+    /// Returns: Self or engine error
+    pub fn try_new(
+        table_def: &TableDef,
+        columns: Vec<Column>,
+        name: Option<String>,
+    ) -> Result<Self> {
         if columns.is_empty() || columns[0].data.is_empty() {
             return Err(Error::InvalidSource);
         }
-        let name = Uuid::now_v7().to_string();
+        let name = name.unwrap_or(Uuid::now_v7().to_string());
 
-        let engine = engines::get_engine(&table_metadata.settings.engine, EngineConfig::default());
-        let data = engine.order_columns(columns, &table_metadata.schema.order_by)?;
+        let Some(table_config) = TABLE_DATA.get(table_def) else {
+            return Err(Error::TableNotFound);
+        };
+
+        let engine = engines::get_engine(
+            &table_config.metadata.settings.engine,
+            EngineConfig::default(),
+        );
+        let data = engine.order_columns(columns, &table_config.metadata.schema.order_by)?;
 
         let marks = generate_indexes(
             &data,
-            &table_metadata.schema.primary_key,
-            table_metadata.settings.index_granularity,
+            &table_config.metadata.schema.primary_key,
+            table_config.metadata.settings.index_granularity,
         );
         let row_count = data[0].data.len() as u64;
 
@@ -168,15 +181,22 @@ impl TablePart {
     /// Writes each column to separate .bin file and info to `PART_INFO_FILENAME`.
     /// All files include magic bytes and CRC32 checksums.
     ///
-    /// Returns: Ok or CouldNotInsertData on I/O failure
-    pub fn save_raw(&mut self, table_def: &TableDef, index_granularity: u32) -> Result<()> {
+    /// Returns: Ok or `CouldNotInsertData` on I/O failure
+    pub fn save_raw(&mut self, table_def: &TableDef) -> Result<()> {
         let raw_dir = self.get_raw_dir(table_def);
         std::fs::create_dir_all(&raw_dir)
             .map_err(|_| Error::CouldNotInsertData("Failed to create raw directory".to_string()))?;
 
+        let granularity = {
+            let Some(config) = TABLE_DATA.get(table_def) else {
+                return Err(Error::TableNotFound);
+            };
+            Ok(config.metadata.settings.index_granularity)
+        }?;
+
         for col_idx in 0..self.data.len() {
             let column_file = raw_dir.join(format!("{}.bin", self.data[col_idx].column_def.name));
-            self.write_column_with_marks(col_idx, &column_file, index_granularity)?;
+            self.write_column_with_marks(col_idx, &column_file, granularity)?;
         }
 
         let info_file = raw_dir.join(PART_INFO_FILENAME);
@@ -185,7 +205,7 @@ impl TablePart {
         Ok(())
     }
 
-    /// Writes a single column file with granule-by-granule serialization and populates MarkInfo.
+    /// Writes a single column file with granule-by-granule serialization and populates `MarkInfo`.
     fn write_column_with_marks(
         &mut self,
         col_idx: usize,
@@ -204,9 +224,12 @@ impl TablePart {
 
             let granule_bytes =
                 bincode::serde::encode_to_vec(granule_data, bincode::config::standard()).map_err(
-                    |e| Error::CouldNotInsertData(format!("Failed to serialize granule: {}", e)),
+                    |e| Error::CouldNotInsertData(format!("Failed to serialize granule: {e}")),
                 )?;
-            let granule_bytes = compress_bytes(&granule_bytes, granule_data[0].get_type())?;
+            let granule_bytes = compress_bytes(
+                &granule_bytes,
+                granule_data[0].get_type().get_optimal_compression(),
+            )?;
             file_bytes.extend(&granule_bytes);
             let end_pos = file_bytes.len() as u64;
 
@@ -227,7 +250,7 @@ impl TablePart {
         file_bytes.extend(crc.to_le_bytes());
 
         std::fs::write(path, file_bytes)
-            .map_err(|e| Error::CouldNotInsertData(format!("Failed to write file: {}", e)))
+            .map_err(|e| Error::CouldNotInsertData(format!("Failed to write file: {e}",)))
     }
 
     /// Atomically moves part from raw to normal directory and updates in-memory index.
@@ -235,34 +258,19 @@ impl TablePart {
     /// Updates memory first (under exclusive lock), then renames directory.
     /// Rolls back memory change on filesystem failure.
     ///
-    /// Returns: Ok or CouldNotInsertData with rollback on failure
+    /// Returns: Ok or `CouldNotInsertData` with rollback on failure
     pub fn move_to_normal(&self, table_def: &TableDef) -> Result<()> {
         let raw_dir = self.get_raw_dir(table_def);
         let normal_dir = table_def.get_path().join(&self.info.name);
 
-        // Acquire exclusive access to TABLE_DATA entry BEFORE filesystem operations
-        let Some(mut entry) = TABLE_DATA.get_sync(table_def) else {
-            return Err(Error::CouldNotInsertData(
-                "Could not store in memory".to_string(),
-            ));
+        let part_info = self.info.clone();
+        let Some(mut result) = TABLE_DATA.get_mut(table_def) else {
+            return Err(Error::TableNotFound);
         };
+        result.infos.push(part_info.clone());
 
-        // This is safe because:
-        // - We have exclusive access via OccupiedEntry from get_sync()
-        // - No other thread can modify this entry while we hold it
-        // - The part is cloned, so no lifetime issues
-        let index;
-        unsafe {
-            entry.get_mut().infos.push(self.info.clone());
-            index = entry.infos.len() - 1;
-        }
-
-        // atomic move
         if let Err(e) = std::fs::rename(&raw_dir, &normal_dir) {
-            // Rollback: remove the part we just added
-            unsafe {
-                entry.get_mut().infos.remove(index);
-            }
+            result.infos.pop_if(|info| info.name == part_info.name);
             return Err(Error::CouldNotInsertData(format!(
                 "Failed to move part directory: {e}"
             )));
@@ -305,10 +313,10 @@ fn generate_indexes(
 
 /// Loads all table parts from filesystem into memory on startup.
 ///
-/// Scans all databases and tables, loads part indexes, and populates TABLE_DATA.
+/// Scans all databases and tables, loads part indexes, and populates `TABLE_DATA`.
 /// Cleans up any leftover raw directories from crashes.
 ///
-/// Returns: Ok or CouldNotInsertData on critical failure
+/// Returns: Ok or `CouldNotInsertData` on critical failure
 pub fn load_all_parts_on_startup(db_dir: &Path) -> Result<()> {
     info!(
         "Loading parts from database directory: {}",
@@ -321,12 +329,12 @@ pub fn load_all_parts_on_startup(db_dir: &Path) -> Result<()> {
     }
 
     let databases = std::fs::read_dir(db_dir).map_err(|e| {
-        Error::CouldNotInsertData(format!("Failed to read database directory: {}", e))
+        Error::CouldNotInsertData(format!("Failed to read database directory: {e}",))
     })?;
 
     for database_entry in databases {
         let database_entry = database_entry.map_err(|e| {
-            Error::CouldNotInsertData(format!("Failed to read database entry: {}", e))
+            Error::CouldNotInsertData(format!("Failed to read database entry: {e}",))
         })?;
 
         let database_path = database_entry.path();
@@ -338,14 +346,13 @@ pub fn load_all_parts_on_startup(db_dir: &Path) -> Result<()> {
 
         let tables = std::fs::read_dir(&database_path).map_err(|e| {
             Error::CouldNotInsertData(format!(
-                "Failed to read tables in database {}: {}",
-                database_name, e
+                "Failed to read tables in database {database_name}: {e}",
             ))
         })?;
 
         for table_entry in tables {
             let table_entry = table_entry.map_err(|e| {
-                Error::CouldNotInsertData(format!("Failed to read table entry: {}", e))
+                Error::CouldNotInsertData(format!("Failed to read table entry: {e}"))
             })?;
 
             let table_path = table_entry.path();
@@ -366,16 +373,23 @@ pub fn load_all_parts_on_startup(db_dir: &Path) -> Result<()> {
                 continue;
             };
 
+            TABLE_DATA.insert(
+                table_def.clone(),
+                TableConfig {
+                    metadata: table_metadata,
+                    infos: Vec::new(),
+                },
+            );
+
             let parts = std::fs::read_dir(&table_path).map_err(|e| {
-                Error::CouldNotInsertData(format!(
-                    "Failed to read parts in table {}: {}",
-                    table_def, e
-                ))
+                Error::CouldNotInsertData(
+                    format!("Failed to read parts in table {table_def}: {e}",),
+                )
             })?;
 
             for part_entry in parts {
                 let part_entry = part_entry.map_err(|e| {
-                    Error::CouldNotInsertData(format!("Failed to read part entry: {}", e))
+                    Error::CouldNotInsertData(format!("Failed to read part entry: {e}",))
                 })?;
 
                 let part_path = part_entry.path();
@@ -387,44 +401,34 @@ pub fn load_all_parts_on_startup(db_dir: &Path) -> Result<()> {
 
                 if part_name == "raw" {
                     match std::fs::remove_dir_all(&part_path) {
-                        Ok(_) => {
-                            info!("Removed raw directory for table {}", table_def);
+                        Ok(()) => {
+                            info!("Removed raw directory for table {table_def}",);
                         }
                         Err(e) => {
-                            warn!(
-                                "Failed to remove raw directory for table {}: {}",
-                                table_def, e
-                            );
+                            warn!("Failed to remove raw directory for table {table_def}: {e}");
                         }
                     }
                     continue;
                 }
 
+                if part_name.ends_with(".old") {
+                    warn!(
+                        "Found old part: {part_name}. Consult the logs to make the decision about removal."
+                    );
+                    continue;
+                }
+
                 let part_info_file_path = part_path.join(PART_INFO_FILENAME);
-                match read_file_with_crc(&part_info_file_path, MAGIC_BYTES_INFO) {
+                match read_file_with_crc::<TablePartInfo>(&part_info_file_path, MAGIC_BYTES_INFO) {
                     Ok(info) => {
-                        let mut entry =
-                            TABLE_DATA
-                                .entry_sync(table_def.clone())
-                                .or_insert(TableConfig {
-                                    metadata: table_metadata.clone(),
-                                    infos: Vec::new(),
-                                });
-
-                        // This is safe, because
-                        // we receive exclusive access to the entry (as uses `OccupiedEntry`),
-                        // and no other thread can modify it.
-                        unsafe {
-                            entry.get_mut().infos.push(info);
-                        }
-
-                        info!("Loaded part {} for table {}", part_name, table_def);
+                        let Some(mut result) = TABLE_DATA.get_mut(&table_def) else {
+                            continue;
+                        };
+                        result.infos.push(info);
+                        info!("Loaded part {part_name} for table {table_def}");
                     }
                     Err(e) => {
-                        warn!(
-                            "Failed to load part {} for table {}: {:?}",
-                            part_name, table_def, e
-                        );
+                        warn!("Failed to load part {part_name} for table {table_def}: {e:?}",);
                     }
                 }
             }

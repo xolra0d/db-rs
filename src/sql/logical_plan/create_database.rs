@@ -10,13 +10,13 @@ impl LogicalPlan {
     ///
     /// Returns
     ///   * Ok when:
-    ///     1. Folder (database) already exists and `IF NOT EXISTS` is passed: LogicalPlan::Skip.
+    ///     1. Folder (database) already exists and `IF NOT EXISTS` is passed: `LogicalPlan::Skip`.
     ///     2. Folder (database) does not exist.
     ///   * Error when:
-    ///     1. Table name was specified also (e.g., `db_name.TABLE_NAME`): InvalidDatabaseName.
-    ///     2. Function passed instead of name: InvalidDatabaseName.
-    ///     3. Name has invalid characters: InvalidDatabaseName.
-    ///     4. Folder (database) already exists and `IF NOT EXISTS` is not passed: DatabaseAlreadyExists.
+    ///     1. Table name was specified also (e.g., `db_name.TABLE_NAME`): `InvalidDatabaseName`.
+    ///     2. Function passed instead of name: `InvalidDatabaseName`.
+    ///     3. Name has invalid characters: `InvalidDatabaseName`.
+    ///     4. Folder (database) already exists and `IF NOT EXISTS` is not passed: `DatabaseAlreadyExists`.
     pub fn from_create_database(db_name: &ObjectName, if_not_exists: bool) -> Result<Self> {
         if db_name.0.len() != 1 {
             return Err(Error::InvalidDatabaseName);
