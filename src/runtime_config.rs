@@ -1,4 +1,4 @@
-use scc::HashIndex;
+use dashmap::DashMap;
 
 use crate::storage::{TableDef, TableMetadata, TablePartInfo};
 
@@ -8,7 +8,5 @@ pub struct TableConfig {
     pub infos: Vec<TablePartInfo>,
 }
 
-// Using HashIndex, as it's optimized for read access
-// by providing lock-free reads
-pub static TABLE_DATA: std::sync::LazyLock<HashIndex<TableDef, TableConfig>> =
-    std::sync::LazyLock::new(HashIndex::default);
+pub static TABLE_DATA: std::sync::LazyLock<DashMap<TableDef, TableConfig>> =
+    std::sync::LazyLock::new(DashMap::default);

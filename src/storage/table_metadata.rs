@@ -50,7 +50,7 @@ pub struct TableMetadata {
 impl TableMetadata {
     /// Creates new table metadata with current timestamp and default flags.
     ///
-    /// Returns: TableMetadata or error from get_unix_time()
+    /// Returns: `TableMetadata` or error from `get_unix_time()`
     pub fn try_new(schema: TableSchema, settings: TableSettings) -> Result<Self> {
         Ok(Self {
             version: VERSION,

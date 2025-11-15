@@ -1,7 +1,4 @@
-use scc::Guard;
-
 use crate::error::{Error, Result};
-use crate::runtime_config::TABLE_DATA;
 use crate::sql::CommandRunner;
 use crate::storage::{Column, OutputTable, TableDef, TablePart};
 
@@ -12,18 +9,12 @@ impl CommandRunner {
     /// Which results in atomic inserts.
     ///
     /// Returns:
-    ///   * Ok: OutputTable with success status
-    ///   * Error: TableNotFound or CouldNotInsertData on persistence failure
+    ///   * Ok: `OutputTable` with success status
+    ///   * Error: `TableNotFound` or `CouldNotInsertData` on persistence failure
     pub fn insert(table_def: TableDef, columns: Vec<Column>) -> Result<OutputTable> {
-        let guard = Guard::new();
-        let Some(table_config) = TABLE_DATA.peek(&table_def, &guard) else {
-            return Err(Error::TableNotFound);
-        };
+        let mut table_part = TablePart::try_new(&table_def, columns, None)?;
 
-        let mut table_part = TablePart::try_new(&table_config.metadata, columns)?;
-        let index_granularity = table_config.metadata.settings.index_granularity;
-
-        table_part.save_raw(&table_def, index_granularity)?;
+        table_part.save_raw(&table_def)?;
 
         let move_result = table_part.move_to_normal(&table_def);
         if move_result.is_ok() {

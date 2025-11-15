@@ -54,7 +54,7 @@ pub struct OutputTable {
 }
 
 impl OutputTable {
-    /// Creates new OutputTable with provided columns.
+    /// Creates new `OutputTable` with provided columns.
     pub fn new(columns: Vec<Column>) -> Self {
         Self { columns }
     }
@@ -83,7 +83,7 @@ pub struct TableDef {
 
 impl fmt::Display for TableDef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}.{}", self.database, self.table)
+        write!(f, "({}.{})", self.database, self.table)
     }
 }
 
@@ -128,7 +128,7 @@ impl TryFrom<&ObjectName> for TableDef {
                 "Currently unimplemented.".to_string(),
             ));
         };
-        let database = database.value.to_string();
+        let database = database.value.clone();
 
         let ObjectNamePart::Identifier(ref table) = names[1] else {
             return Err(Error::UnsupportedCommand(
@@ -145,7 +145,7 @@ impl TryFrom<&ObjectName> for TableDef {
 
 /// Returns current Unix timestamp in milliseconds.
 ///
-/// Returns: u64 timestamp or SystemTimeWentBackword error
+/// Returns: u64 timestamp or `SystemTimeWentBackword` error
 pub fn get_unix_time() -> Result<u64> {
     let now: SystemTime = SystemTime::now();
     u64::try_from(
@@ -158,13 +158,13 @@ pub fn get_unix_time() -> Result<u64> {
 
 /// Reads a specific file with crc32.
 ///
-/// Returns: T or CouldNotReadData on failure
+/// Returns: T or `CouldNotReadData` on failure
 pub fn read_file_with_crc<T>(path: &Path, magic_bytes: &[u8]) -> Result<T>
 where
     T: for<'de> Deserialize<'de>,
 {
     let file_bytes = std::fs::read(path)
-        .map_err(|e| Error::CouldNotReadData(format!("Failed to read column file: {}", e)))?;
+        .map_err(|e| Error::CouldNotReadData(format!("Failed to read column file: {e}")))?;
 
     if file_bytes.len() <= magic_bytes.len() + 4 {
         return Err(Error::CouldNotReadData("Column file too small".to_string()));
@@ -195,14 +195,14 @@ where
 
     let file = bincode::serde::decode_from_slice(data_bytes, bincode::config::standard())
         .map(|x| x.0)
-        .map_err(|e| Error::CouldNotReadData(format!("Failed to deserialize column: {}", e)))?;
+        .map_err(|e| Error::CouldNotReadData(format!("Failed to deserialize column: {e}")))?;
 
     Ok(file)
 }
 
 /// Writes to a specific file with crc32.
 ///
-/// Returns: () or CouldNotInsertData on failure
+/// Returns: () or `CouldNotInsertData` on failure
 pub fn write_file_with_crc<T>(data: &T, path: &PathBuf, magic_bytes: &[u8]) -> Result<()>
 where
     T: Serialize,
@@ -210,7 +210,7 @@ where
     let mut bytes = Vec::from(magic_bytes);
 
     let data_bytes = bincode::serde::encode_to_vec(data, bincode::config::standard())
-        .map_err(|e| Error::CouldNotInsertData(format!("Failed to serialize column: {}", e)))?;
+        .map_err(|e| Error::CouldNotInsertData(format!("Failed to serialize column: {e}")))?;
 
     let crc = crc32fast::hash(&data_bytes);
 
@@ -218,5 +218,5 @@ where
     bytes.extend(crc.to_le_bytes());
 
     std::fs::write(path, bytes)
-        .map_err(|e| Error::CouldNotInsertData(format!("Failed to write file: {}", e)))
+        .map_err(|e| Error::CouldNotInsertData(format!("Failed to write file: {e}")))
 }

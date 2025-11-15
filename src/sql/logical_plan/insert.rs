@@ -1,4 +1,3 @@
-use scc::Guard;
 use sqlparser::ast::{Expr, Insert, SetExpr, TableObject, UnaryOperator, Value as SQLValue};
 
 use crate::error::{Error, Result};
@@ -7,7 +6,7 @@ use crate::sql::sql_parser::LogicalPlan;
 use crate::storage::{Column, ColumnDefOption, TableDef, Value};
 
 impl LogicalPlan {
-    /// Parses INSERT statement into LogicalPlan::Insert variant.
+    /// Parses INSERT statement into `LogicalPlan::Insert` variant.
     ///
     /// Validates that:
     /// - Table exists and columns are valid
@@ -15,8 +14,8 @@ impl LogicalPlan {
     /// - Values match column types
     ///
     /// Returns:
-    ///   * Ok: LogicalPlan::Insert with validated columns and data
-    ///   * Error: TableNotFound, InvalidColumnName, InvalidColumnsSpecified, InvalidSource, or EmptySource
+    ///   * Ok: `LogicalPlan::Insert` with validated columns and data
+    ///   * Error: `TableNotFound`, `InvalidColumnName`, `InvalidColumnsSpecified`, `InvalidSource`, or `EmptySource`
     pub fn from_insert(insert: &Insert) -> Result<Self> {
         let TableObject::TableName(ref table) = insert.table else {
             return Err(Error::UnsupportedCommand(
@@ -25,8 +24,7 @@ impl LogicalPlan {
         };
         let table_def = TableDef::try_from(table)?;
 
-        let guard = Guard::new();
-        let Some(table_config) = TABLE_DATA.peek(&table_def, &guard) else {
+        let Some(table_config) = TABLE_DATA.get(&table_def) else {
             return Err(Error::TableNotFound);
         };
 

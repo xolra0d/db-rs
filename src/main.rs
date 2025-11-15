@@ -1,3 +1,4 @@
+mod background_merge;
 mod config;
 mod engines;
 mod error;
@@ -6,17 +7,18 @@ mod sql;
 mod storage;
 mod tcp_io_parser;
 
+use crate::background_merge::BackgroundMerge;
+use crate::config::CONFIG;
+use crate::error::Error;
+use crate::sql::CommandRunner;
+use crate::tcp_io_parser::Parser;
+
 use futures::{SinkExt as _, StreamExt as _};
 use log::{error, info};
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 use tokio_util::codec::Decoder as _;
-
-use crate::config::CONFIG;
-use crate::error::Error;
-use crate::sql::CommandRunner;
-use crate::tcp_io_parser::Parser;
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
@@ -26,6 +28,10 @@ async fn main() -> Result<(), String> {
 
     storage::load_all_parts_on_startup(CONFIG.get_db_dir())
         .map_err(|error| format!("Failed to load parts on startup: {error:?}"))?;
+
+    tokio::spawn(async {
+        BackgroundMerge::start();
+    });
 
     let max_conn = Arc::new(Semaphore::new(CONFIG.get_max_connections()));
 

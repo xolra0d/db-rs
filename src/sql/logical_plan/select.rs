@@ -1,4 +1,3 @@
-use scc::Guard;
 use sqlparser::ast::{Expr, Query, Select, SelectItem, SetExpr, TableFactor};
 
 use crate::error::{Error, Result};
@@ -10,7 +9,8 @@ impl LogicalPlan {
     pub fn from_query(query: &Query) -> Result<Self> {
         match query.body.as_ref() {
             SetExpr::Select(select) => Self::parse_select(select),
-            _ => unimplemented!(),
+            SetExpr::Query(_query) => unimplemented!(),
+            query => Err(Error::UnsupportedCommand(query.to_string())),
         }
     }
 
@@ -32,12 +32,9 @@ impl LogicalPlan {
             ));
         }
 
-        let guard = Guard::new();
-        let Some(table_config) = TABLE_DATA.peek(&table_def, &guard) else {
-            return Err(Error::TableNotFound);
+        let mut plan = Self::Scan {
+            table: table_def.clone(),
         };
-
-        let mut plan = Self::Scan { table: table_def };
 
         let mut columns = Vec::with_capacity(select.projection.len());
 
@@ -51,6 +48,10 @@ impl LogicalPlan {
                 return Err(Error::UnsupportedCommand(
                     "Unsupported projection expression.".to_string(),
                 ));
+            };
+
+            let Some(table_config) = TABLE_DATA.get(&table_def) else {
+                return Err(Error::TableNotFound);
             };
 
             let column = table_config
