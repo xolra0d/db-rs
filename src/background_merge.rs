@@ -14,17 +14,48 @@ impl BackgroundMerge {
                 continue;
             };
 
-            let part_0_cols = Self::load_part(&merge_data.table_def, &merge_data.part_0);
-            let part_1_cols = Self::load_part(&merge_data.table_def, &merge_data.part_1);
+            let part_0_cols = match Self::load_part(&merge_data.table_def, &merge_data.part_0) {
+                Ok(part_0_cols) => part_0_cols,
+                Err(error) => {
+                    error!(
+                        "Error loading part ({}): {error:?}",
+                        &merge_data.part_0.name
+                    );
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    continue;
+                }
+            };
+
+            let part_1_cols = match Self::load_part(&merge_data.table_def, &merge_data.part_1) {
+                Ok(part_1_cols) => part_1_cols,
+                Err(error) => {
+                    error!(
+                        "Error loading part ({}): {error:?}",
+                        &merge_data.part_1.name
+                    );
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    continue;
+                }
+            };
+
             let merged = Self::merge_parts(part_0_cols, part_1_cols);
 
-            let mut new_part = TablePart::try_new(
+            let mut new_part = match TablePart::try_new(
                 &merge_data.table_def,
                 merged,
-                Some(merge_data.part_1.name.clone()),
-            ) // use latest name of two for proper future merging
-            .unwrap();
-            new_part.save_raw(&merge_data.table_def).unwrap();
+                Some(merge_data.part_1.name.clone()), // use latest name of two for proper future merging
+            ) {
+                Ok(new_part) => new_part,
+                Err(error) => {
+                    error!("Failed to create new TablePart during merge: {error}");
+                    continue;
+                }
+            };
+
+            if let Err(error) = new_part.save_raw(&merge_data.table_def) {
+                error!("Failed to save merged TablePart: {error}");
+                continue;
+            };
 
             // prevent from new selects
             let Some(mut config) = TABLE_DATA.get_mut(&merge_data.table_def) else {
@@ -108,7 +139,7 @@ impl BackgroundMerge {
         }
     }
 
-    fn load_part(table_def: &TableDef, part: &TablePartInfo) -> Vec<Column> {
+    fn load_part(table_def: &TableDef, part: &TablePartInfo) -> Result<Vec<Column>, String> {
         let mut columns = Vec::new();
 
         // column-stored version
@@ -121,10 +152,10 @@ impl BackgroundMerge {
         for (col_idx, column_def) in part.column_defs.iter().enumerate() {
             let val = part
                 .read_column(table_def, column_def, marks[col_idx].as_slice())
-                .unwrap();
+                .map_err(|error| error.to_string())?;
             columns.push(val);
         }
-        columns
+        Ok(columns)
     }
 
     fn merge_parts(mut part_0: Vec<Column>, part_1: Vec<Column>) -> Vec<Column> {
@@ -133,7 +164,7 @@ impl BackgroundMerge {
                 .iter()
                 .position(|col| col.column_def == column_1.column_def)
             {
-                part_0[position].data.extend(column_1.data.into_iter());
+                part_0[position].data.extend(column_1.data.into_iter()); // parts are guaranteed to be non-empty.
             } else {
                 let mut data = vec![Value::Null; part_0[0].data.len()];
                 data.extend(column_1.data.into_iter());
@@ -171,7 +202,8 @@ fn find_two_parts() -> Option<MergeData> {
     })
 }
 
-/// Orders UUID by timestamps with seconds and nanoseconds
+/// Try to parse both UUIDs and compare their timestamps.
+/// If either fails, fall back to string comparison.
 fn uuid_str_cmp(t1: &str, t2: &str) -> std::cmp::Ordering {
     if t1 == t2 {
         return std::cmp::Ordering::Equal;
@@ -179,19 +211,20 @@ fn uuid_str_cmp(t1: &str, t2: &str) -> std::cmp::Ordering {
 
     // (seconds, subsec_nanos)
     let t1_unix = Uuid::parse_str(t1)
-        .unwrap()
-        .get_timestamp()
-        .unwrap()
-        .to_unix();
+        .ok()
+        .and_then(|uuid| uuid.get_timestamp().map(|ts| ts.to_unix()));
     let t2_unix = Uuid::parse_str(t2)
-        .unwrap()
-        .get_timestamp()
-        .unwrap()
-        .to_unix();
+        .ok()
+        .and_then(|uuid| uuid.get_timestamp().map(|ts| ts.to_unix()));
 
-    if (t1_unix.0 > t2_unix.0) || (t1_unix.0 == t2_unix.0 && t1_unix.1 > t2_unix.1) {
-        std::cmp::Ordering::Greater
-    } else {
-        std::cmp::Ordering::Less
+    match (t1_unix, t2_unix) {
+        (Some(t1_unix), Some(t2_unix)) => {
+            if (t1_unix.0 > t2_unix.0) || (t1_unix.0 == t2_unix.0 && t1_unix.1 > t2_unix.1) {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Less
+            }
+        }
+        _ => t1.cmp(t2),
     }
 }

@@ -29,7 +29,7 @@ async fn main() -> Result<(), String> {
     storage::load_all_parts_on_startup(CONFIG.get_db_dir())
         .map_err(|error| format!("Failed to load parts on startup: {error:?}"))?;
 
-    tokio::spawn(async {
+    std::thread::spawn(|| {
         BackgroundMerge::start();
     });
 

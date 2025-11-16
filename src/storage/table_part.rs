@@ -250,7 +250,7 @@ impl TablePart {
         file_bytes.extend(crc.to_le_bytes());
 
         std::fs::write(path, file_bytes)
-            .map_err(|e| Error::CouldNotInsertData(format!("Failed to write file: {e}",)))
+            .map_err(|e| Error::CouldNotInsertData(format!("Failed to write file: {e}")))
     }
 
     /// Atomically moves part from raw to normal directory and updates in-memory index.
@@ -329,12 +329,12 @@ pub fn load_all_parts_on_startup(db_dir: &Path) -> Result<()> {
     }
 
     let databases = std::fs::read_dir(db_dir).map_err(|e| {
-        Error::CouldNotInsertData(format!("Failed to read database directory: {e}",))
+        Error::CouldNotInsertData(format!("Failed to read database directory: {e}"))
     })?;
 
     for database_entry in databases {
         let database_entry = database_entry.map_err(|e| {
-            Error::CouldNotInsertData(format!("Failed to read database entry: {e}",))
+            Error::CouldNotInsertData(format!("Failed to read database entry: {e}"))
         })?;
 
         let database_path = database_entry.path();
@@ -346,7 +346,7 @@ pub fn load_all_parts_on_startup(db_dir: &Path) -> Result<()> {
 
         let tables = std::fs::read_dir(&database_path).map_err(|e| {
             Error::CouldNotInsertData(format!(
-                "Failed to read tables in database {database_name}: {e}",
+                "Failed to read tables in database {database_name}: {e}"
             ))
         })?;
 
@@ -382,14 +382,12 @@ pub fn load_all_parts_on_startup(db_dir: &Path) -> Result<()> {
             );
 
             let parts = std::fs::read_dir(&table_path).map_err(|e| {
-                Error::CouldNotInsertData(
-                    format!("Failed to read parts in table {table_def}: {e}",),
-                )
+                Error::CouldNotInsertData(format!("Failed to read parts in table {table_def}: {e}"))
             })?;
 
             for part_entry in parts {
                 let part_entry = part_entry.map_err(|e| {
-                    Error::CouldNotInsertData(format!("Failed to read part entry: {e}",))
+                    Error::CouldNotInsertData(format!("Failed to read part entry: {e}"))
                 })?;
 
                 let part_path = part_entry.path();
@@ -402,7 +400,7 @@ pub fn load_all_parts_on_startup(db_dir: &Path) -> Result<()> {
                 if part_name == "raw" {
                     match std::fs::remove_dir_all(&part_path) {
                         Ok(()) => {
-                            info!("Removed raw directory for table {table_def}",);
+                            info!("Removed raw directory for table {table_def}");
                         }
                         Err(e) => {
                             warn!("Failed to remove raw directory for table {table_def}: {e}");
@@ -428,7 +426,7 @@ pub fn load_all_parts_on_startup(db_dir: &Path) -> Result<()> {
                         info!("Loaded part {part_name} for table {table_def}");
                     }
                     Err(e) => {
-                        warn!("Failed to load part {part_name} for table {table_def}: {e:?}",);
+                        warn!("Failed to load part {part_name} for table {table_def}: {e:?}");
                     }
                 }
             }

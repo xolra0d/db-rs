@@ -1,10 +1,12 @@
+use dashmap::Entry;
+use log::error;
+
 use crate::error::{Error, Result};
 use crate::runtime_config::{TABLE_DATA, TableConfig};
 use crate::sql::CommandRunner;
 use crate::storage::table_metadata::{TABLE_METADATA_FILENAME, TABLE_METADATA_MAGIC_BYTES};
 use crate::storage::{ColumnDef, OutputTable, TableDef, write_file_with_crc};
 use crate::storage::{TableMetadata, TableSchema, TableSettings};
-use log::{error, warn};
 
 impl CommandRunner {
     /// Creates a table with metadata and filesystem structures.
@@ -28,33 +30,28 @@ impl CommandRunner {
         };
         let table_metadata = TableMetadata::try_new(table_schema, settings)?;
 
-        if TABLE_DATA.contains_key(&table_def) {
-            return Err(Error::TableEntryAlreadyExists);
-        }
-
-        // Now we can safely create the table
         let table_path = table_def.get_path();
+        // will lock for mutual access
+        let Entry::Vacant(entry) = TABLE_DATA.entry(table_def) else {
+            return Err(Error::TableAlreadyExists);
+        };
+
         std::fs::create_dir(&table_path)
-            .map_err(|e| Error::CouldNotInsertData(format!("Failed to create table dir: {e}")))?;
+            .map_err(|e| Error::CouldNotCreateTable(format!("Failed to create table dir: {e}")))?;
         let path = table_path.join(TABLE_METADATA_FILENAME);
-        if let Err(e) = write_file_with_crc(&table_metadata, &path, TABLE_METADATA_MAGIC_BYTES) {
-            if let Err(cleanup_err) = std::fs::remove_dir_all(table_def.get_path()) {
+        if let Err(error) = write_file_with_crc(&table_metadata, &path, TABLE_METADATA_MAGIC_BYTES)
+        {
+            if let Err(cleanup_err) = std::fs::remove_dir_all(table_path) {
                 error!("Failed to cleanup directory after metadata write failure: {cleanup_err}",);
             }
-            return Err(e);
+            return Err(error);
         }
         let table_config = TableConfig {
             metadata: table_metadata,
             infos: Vec::new(),
         };
 
-        if TABLE_DATA.insert(table_def.clone(), table_config).is_some() {
-            warn!("concurrent insert resulted in table drop: {table_def}",);
-            if let Err(cleanup_err) = std::fs::remove_dir_all(table_def.get_path()) {
-                warn!("Couldn't remove malformed table {table_def}: {cleanup_err}");
-            }
-            return Err(Error::TableEntryAlreadyExists);
-        }
+        entry.insert(table_config);
 
         Ok(OutputTable::build_ok())
     }
