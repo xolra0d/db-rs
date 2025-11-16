@@ -150,12 +150,12 @@ pub fn compare_values(left: &Value, right: &Value) -> Result<Ordering> {
         (
             l @ (Value::Int8(_) | Value::Int16(_) | Value::Int32(_) | Value::Int64(_)),
             r @ (Value::UInt8(_) | Value::UInt16(_) | Value::UInt32(_) | Value::UInt64(_)),
-        ) => compare_signed_unsigned(to_i64(l), to_u64(r)),
+        ) => Ok(compare_signed_unsigned(to_i64(l), to_u64(r))),
 
         (
             l @ (Value::UInt8(_) | Value::UInt16(_) | Value::UInt32(_) | Value::UInt64(_)),
             r @ (Value::Int8(_) | Value::Int16(_) | Value::Int32(_) | Value::Int64(_)),
-        ) => compare_signed_unsigned(to_i64(r), to_u64(l)).map(|o| o.reverse()),
+        ) => Ok(compare_signed_unsigned(to_i64(r), to_u64(l)).reverse()),
 
         _ => Err(Error::UnsupportedCommand(
             "Type mismatch in comparison".to_string(),
@@ -165,9 +165,9 @@ pub fn compare_values(left: &Value, right: &Value) -> Result<Ordering> {
 
 fn to_i64(val: &Value) -> i64 {
     match val {
-        Value::Int8(v) => *v as i64,
-        Value::Int16(v) => *v as i64,
-        Value::Int32(v) => *v as i64,
+        Value::Int8(v) => i64::from(*v),
+        Value::Int16(v) => i64::from(*v),
+        Value::Int32(v) => i64::from(*v),
         Value::Int64(v) => *v,
         _ => unreachable!(),
     }
@@ -175,18 +175,18 @@ fn to_i64(val: &Value) -> i64 {
 
 fn to_u64(val: &Value) -> u64 {
     match val {
-        Value::UInt8(v) => *v as u64,
-        Value::UInt16(v) => *v as u64,
-        Value::UInt32(v) => *v as u64,
+        Value::UInt8(v) => u64::from(*v),
+        Value::UInt16(v) => u64::from(*v),
+        Value::UInt32(v) => u64::from(*v),
         Value::UInt64(v) => *v,
         _ => unreachable!(),
     }
 }
 
-fn compare_signed_unsigned(signed: i64, unsigned: u64) -> Result<Ordering> {
+fn compare_signed_unsigned(signed: i64, unsigned: u64) -> Ordering {
     if signed < 0 || unsigned > i64::MAX as u64 {
-        Ok(Ordering::Less)
+        Ordering::Less
     } else {
-        Ok(signed.cmp(&(unsigned as i64)))
+        signed.cmp(&(unsigned as i64))
     }
 }

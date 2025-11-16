@@ -16,14 +16,14 @@ impl LogicalPlan {
     ///
     /// Returns
     ///   * Ok when:
-    ///     1. Database name and table name (does not exist) provided, columns, their types and order by are valid: LogicalPlan::CreateTable
-    ///     2. Database name and table name (exists and `IF NOT EXISTS` specified) provided, columns, their types and order by are valid: LogicalPlan::Skip
+    ///     1. Database name and table name (does not exist) provided, columns, their types and order by are valid: `LogicalPlan::CreateTable`
+    ///     2. Database name and table name (exists and `IF NOT EXISTS` specified) provided, columns, their types and order by are valid: `LogicalPlan::Skip`
     ///   * Error when:
-    ///     1. Could not parse table and database names from query: UnsupportedCommand.
-    ///     2. Table already exists and `IF NOT EXISTS` is not passed: TableAlreadyExists.
-    ///     3. Any column name provided is invalid: InvalidColumnName.
-    ///     4. Any column name is repeated in specification: InvalidColumnName.
-    ///     5. Unsupported column type was provided: UnsupportedColumnType.
+    ///     1. Could not parse table and database names from query: `UnsupportedCommand`.
+    ///     2. Table already exists and `IF NOT EXISTS` is not passed: `TableAlreadyExists`.
+    ///     3. Any column name provided is invalid: `InvalidColumnName`.
+    ///     4. Any column name is repeated in specification: `InvalidColumnName`.
+    ///     5. Unsupported column type was provided: `UnsupportedColumnType`.
     ///     6. `parse_column_constraints` returns error.
     ///     7. `parse_order_by` returns error.
     pub fn from_create_table(create_table: &CreateTable) -> Result<Self> {
@@ -114,11 +114,11 @@ impl LogicalPlan {
     ///
     /// Returns:
     ///   * Ok when:
-    ///     1. None is provided: EngineName::MergeTree.
-    ///     2. "Engine".lowercase() option is provided and name is valid: EngineName::{SPECIFIED_ENGINE_NAME}
+    ///     1. None is provided: `EngineName::MergeTree`.
+    ///     2. `"Engine".lowercase()` option is provided and name is valid: `EngineName::{SPECIFIED_ENGINE_NAME}`
     ///   * Error when:
-    ///     1. More than 1 option is provided: InvalidEngineName
-    ///     2. When option name is not "Engine".lowercase(): InvalidEngineName
+    ///     1. More than 1 option is provided: `InvalidEngineName`
+    ///     2. When option name is not `"Engine".lowercase()`: `InvalidEngineName`
     ///     3. When engine name is not valid, return error from `EngineName::try_from`
     fn parse_table_options(table_options: &CreateTableOptions) -> Result<TableSettings> {
         match table_options {
@@ -153,11 +153,11 @@ impl LogicalPlan {
     ///   * Ok when:
     ///     1. All columns are unique, exist in the pool of ALL columns: Vec<ColumnDef>
     ///   * Error when:
-    ///     1. If no ORDER BY was provided: InvalidOrderBy.
-    ///     2. If ORDER BY is empty: InvalidOrderBy.
-    ///     3. If column name is not an identifier: InvalidOrderBy.
-    ///     4. If column, not found in all columns, is found in ORDER BY: InvalidOrderBy.
-    ///     5. If the same column is added: InvalidOrderBy.
+    ///     1. If no ORDER BY was provided: `InvalidOrderBy`.
+    ///     2. If ORDER BY is empty: `InvalidOrderBy`.
+    ///     3. If column name is not an identifier: `InvalidOrderBy`.
+    ///     4. If column, not found in all columns, is found in ORDER BY: `InvalidOrderBy`.
+    ///     5. If the same column is added: `InvalidOrderBy`.
     fn parse_order_by(
         order_by_params: &OneOrManyWithParens<Expr>,
         columns: &[&ColumnDef],
@@ -195,11 +195,11 @@ impl LogicalPlan {
     ///   * Ok when:
     ///     1. All columns are unique, exist in the pool of ALL columns: Vec<ColumnDef>
     ///   * Error when:
-    ///     1. If no ORDER BY was provided: InvalidOrderBy.
-    ///     2. If ORDER BY is empty: InvalidOrderBy.
-    ///     3. If column name is not an identifier: InvalidOrderBy.
-    ///     4. If column, not found in all columns, is found in ORDER BY: InvalidOrderBy.
-    ///     5. If the same column is added: InvalidOrderBy.
+    ///     1. If no ORDER BY was provided: `InvalidOrderBy`.
+    ///     2. If ORDER BY is empty: `InvalidOrderBy`.
+    ///     3. If column name is not an identifier: `InvalidOrderBy`.
+    ///     4. If column, not found in all columns, is found in ORDER BY: `InvalidOrderBy`.
+    ///     5. If the same column is added: `InvalidOrderBy`.
     fn parse_primary_key(primary_key: &Expr, columns: &[&ColumnDef]) -> Result<Vec<ColumnDef>> {
         fn parse_ident(expr: &Ident, columns: &[&ColumnDef]) -> Result<ColumnDef> {
             if let Some(column_def) = columns.iter().find(|col| col.name == expr.value) {
@@ -248,8 +248,8 @@ impl LogicalPlan {
     ///   * Ok when:
     ///     1. When provided valid constraint(s): Vec<ColumnDefConstraint>
     ///   * Error when:
-    ///     1. Both NULL and NOT NULL are supplied for the column: UnsupportedColumnConstraint
-    ///     2. Unsupported column constraint is provided: UnsupportedColumnConstraint
+    ///     1. Both NULL and NOT NULL are supplied for the column: `UnsupportedColumnConstraint`
+    ///     2. Unsupported column constraint is provided: `UnsupportedColumnConstraint`
     pub fn parse_column_constraints(
         options: &[ColumnOptionDef],
     ) -> Result<Vec<ColumnDefConstraint>> {

@@ -1,4 +1,5 @@
-use scc::hash_index::Entry;
+use dashmap::Entry;
+use log::error;
 
 use crate::error::{Error, Result};
 use crate::runtime_config::{TABLE_DATA, TableConfig};
@@ -13,8 +14,8 @@ impl CommandRunner {
     /// Atomically reserves table entry in memory, creates directory, and writes metadata.
     ///
     /// Returns:
-    ///   * Ok: OutputTable with success status
-    ///   * Error: TableEntryAlreadyExists or CouldNotInsertData on failure
+    ///   * Ok: `OutputTable` with success status
+    ///   * Error: `TableEntryAlreadyExists` or `CouldNotInsertData` on failure
     pub fn create_table(
         table_def: TableDef,
         columns: Vec<ColumnDef>,
@@ -29,35 +30,28 @@ impl CommandRunner {
         };
         let table_metadata = TableMetadata::try_new(table_schema, settings)?;
 
-        match TABLE_DATA.entry_sync(table_def.clone()) {
-            Entry::Occupied(_) => {
-                return Err(Error::TableEntryAlreadyExists);
-            }
-            Entry::Vacant(vacant_entry) => {
-                // Now we have exclusive access
-                let table_path = table_def.get_path();
-                std::fs::create_dir(&table_path).map_err(|e| {
-                    Error::CouldNotInsertData(format!("Failed to create table dir: {}", e))
-                })?;
-                let path = table_path.join(TABLE_METADATA_FILENAME);
-                if let Err(e) =
-                    write_file_with_crc(&table_metadata, &path, TABLE_METADATA_MAGIC_BYTES)
-                {
-                    if let Err(cleanup_err) = std::fs::remove_dir_all(table_def.get_path()) {
-                        log::error!(
-                            "Warning: Failed to cleanup directory after metadata write failure: {}",
-                            cleanup_err
-                        );
-                    }
-                    return Err(e);
-                }
+        let table_path = table_def.get_path();
+        // will lock for mutual access
+        let Entry::Vacant(entry) = TABLE_DATA.entry(table_def) else {
+            return Err(Error::TableAlreadyExists);
+        };
 
-                vacant_entry.insert_entry(TableConfig {
-                    metadata: table_metadata,
-                    infos: Vec::new(),
-                });
+        std::fs::create_dir(&table_path)
+            .map_err(|e| Error::CouldNotCreateTable(format!("Failed to create table dir: {e}")))?;
+        let path = table_path.join(TABLE_METADATA_FILENAME);
+        if let Err(error) = write_file_with_crc(&table_metadata, &path, TABLE_METADATA_MAGIC_BYTES)
+        {
+            if let Err(cleanup_err) = std::fs::remove_dir_all(table_path) {
+                error!("Failed to cleanup directory after metadata write failure: {cleanup_err}",);
             }
+            return Err(error);
         }
+        let table_config = TableConfig {
+            metadata: table_metadata,
+            infos: Vec::new(),
+        };
+
+        entry.insert(table_config);
 
         Ok(OutputTable::build_ok())
     }

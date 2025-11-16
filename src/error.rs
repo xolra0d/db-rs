@@ -53,10 +53,10 @@ pub enum Error {
     CouldNotInsertData(String),
     #[display("Could not read data: {_0}.")]
     CouldNotReadData(String),
+    #[display("Could not create table: {_0}.")]
+    CouldNotCreateTable(String),
     #[display("No values provided")]
     EmptySource,
-    #[display("Table entry already exists")]
-    TableEntryAlreadyExists,
     #[display("Permission denied")]
     PermissionDenied,
 
