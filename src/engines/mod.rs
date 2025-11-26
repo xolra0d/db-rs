@@ -32,9 +32,11 @@ impl TryFrom<&str> for EngineName {
 #[derive(Default)]
 pub struct EngineConfig {}
 
-/// Returns engine implementation for the given engine name.
-pub fn get_engine(name: &EngineName, config: EngineConfig) -> Box<dyn Engine> {
-    match name {
-        EngineName::MergeTree => Box::new(MergeTreeEngine::new(config)),
+impl EngineName {
+    /// Returns engine implementation for the given engine name.
+    pub fn get_engine(&self, config: EngineConfig) -> Box<dyn Engine> {
+        match self {
+            EngineName::MergeTree => Box::new(MergeTreeEngine::new(config)),
+        }
     }
 }

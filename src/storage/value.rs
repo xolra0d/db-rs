@@ -1,3 +1,4 @@
+use derive_more::Display;
 use serde::{Deserialize, Serialize};
 use sqlparser::ast::{DataType as SQLDatatype, Value as SQLValue};
 use std::cmp::Ordering;
@@ -6,21 +7,34 @@ use uuid::Uuid;
 use crate::error::{Error, Result};
 
 /// Represents a parsed value in our custom protocol
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize, Display)]
 pub enum Value {
+    #[default]
+    #[display("Null")]
     Null,
+    #[display("String({_0})")]
     String(String),
+    #[display("Uuid({_0})")]
     Uuid(Uuid),
+    #[display("Bool({_0})")]
     Bool(bool),
 
+    #[display("Int8({_0})")]
     Int8(i8),
+    #[display("Int16({_0})")]
     Int16(i16),
+    #[display("Int32({_0})")]
     Int32(i32),
+    #[display("Int64({_0})")]
     Int64(i64),
 
+    #[display("UInt8({_0})")]
     UInt8(u8),
+    #[display("UInt16({_0})")]
     UInt16(u16),
+    #[display("UInt32({_0})")]
     UInt32(u32),
+    #[display("UInt64({_0})")]
     UInt64(u64),
 }
 
@@ -130,56 +144,56 @@ impl Value {
         }
     }
 }
-/// Compares two values and returns their ordering.
-pub fn compare_values(left: &Value, right: &Value) -> Result<Ordering> {
-    match (left, right) {
-        (Value::String(l), Value::String(r)) => Ok(l.cmp(r)),
-        (Value::Bool(l), Value::Bool(r)) => Ok(l.cmp(r)),
-        (Value::Uuid(l), Value::Uuid(r)) => Ok(l.cmp(r)),
 
-        (
-            l @ (Value::Int8(_) | Value::Int16(_) | Value::Int32(_) | Value::Int64(_)),
-            r @ (Value::Int8(_) | Value::Int16(_) | Value::Int32(_) | Value::Int64(_)),
-        ) => Ok(to_i64(l).cmp(&to_i64(r))),
+impl PartialOrd for Value {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (self, other) {
+            (Value::String(l), Value::String(r)) => Some(l.cmp(r)),
+            (Value::Bool(l), Value::Bool(r)) => Some(l.cmp(r)),
+            (Value::Uuid(l), Value::Uuid(r)) => Some(l.cmp(r)),
+            (Value::Null, Value::Null) => Some(Ordering::Equal), // todo: maybe replace with not eq..
 
-        (
-            l @ (Value::UInt8(_) | Value::UInt16(_) | Value::UInt32(_) | Value::UInt64(_)),
-            r @ (Value::UInt8(_) | Value::UInt16(_) | Value::UInt32(_) | Value::UInt64(_)),
-        ) => Ok(to_u64(l).cmp(&to_u64(r))),
+            (
+                l @ (Value::Int8(_) | Value::Int16(_) | Value::Int32(_) | Value::Int64(_)),
+                r @ (Value::Int8(_) | Value::Int16(_) | Value::Int32(_) | Value::Int64(_)),
+            ) => Some(to_i64(l)?.cmp(&to_i64(r)?)),
 
-        (
-            l @ (Value::Int8(_) | Value::Int16(_) | Value::Int32(_) | Value::Int64(_)),
-            r @ (Value::UInt8(_) | Value::UInt16(_) | Value::UInt32(_) | Value::UInt64(_)),
-        ) => Ok(compare_signed_unsigned(to_i64(l), to_u64(r))),
+            (
+                l @ (Value::UInt8(_) | Value::UInt16(_) | Value::UInt32(_) | Value::UInt64(_)),
+                r @ (Value::UInt8(_) | Value::UInt16(_) | Value::UInt32(_) | Value::UInt64(_)),
+            ) => Some(to_u64(l)?.cmp(&to_u64(r)?)),
 
-        (
-            l @ (Value::UInt8(_) | Value::UInt16(_) | Value::UInt32(_) | Value::UInt64(_)),
-            r @ (Value::Int8(_) | Value::Int16(_) | Value::Int32(_) | Value::Int64(_)),
-        ) => Ok(compare_signed_unsigned(to_i64(r), to_u64(l)).reverse()),
+            (
+                l @ (Value::Int8(_) | Value::Int16(_) | Value::Int32(_) | Value::Int64(_)),
+                r @ (Value::UInt8(_) | Value::UInt16(_) | Value::UInt32(_) | Value::UInt64(_)),
+            ) => Some(compare_signed_unsigned(to_i64(l)?, to_u64(r)?)),
 
-        _ => Err(Error::UnsupportedCommand(
-            "Type mismatch in comparison".to_string(),
-        )),
+            (
+                l @ (Value::UInt8(_) | Value::UInt16(_) | Value::UInt32(_) | Value::UInt64(_)),
+                r @ (Value::Int8(_) | Value::Int16(_) | Value::Int32(_) | Value::Int64(_)),
+            ) => Some(compare_signed_unsigned(to_i64(r)?, to_u64(l)?).reverse()),
+            _ => None,
+        }
     }
 }
 
-fn to_i64(val: &Value) -> i64 {
+fn to_i64(val: &Value) -> Option<i64> {
     match val {
-        Value::Int8(v) => i64::from(*v),
-        Value::Int16(v) => i64::from(*v),
-        Value::Int32(v) => i64::from(*v),
-        Value::Int64(v) => *v,
-        _ => unreachable!(),
+        Value::Int8(v) => Some(i64::from(*v)),
+        Value::Int16(v) => Some(i64::from(*v)),
+        Value::Int32(v) => Some(i64::from(*v)),
+        Value::Int64(v) => Some(*v),
+        _ => None,
     }
 }
 
-fn to_u64(val: &Value) -> u64 {
+fn to_u64(val: &Value) -> Option<u64> {
     match val {
-        Value::UInt8(v) => u64::from(*v),
-        Value::UInt16(v) => u64::from(*v),
-        Value::UInt32(v) => u64::from(*v),
-        Value::UInt64(v) => *v,
-        _ => unreachable!(),
+        Value::UInt8(v) => Some(u64::from(*v)),
+        Value::UInt16(v) => Some(u64::from(*v)),
+        Value::UInt32(v) => Some(u64::from(*v)),
+        Value::UInt64(v) => Some(*v),
+        _ => None,
     }
 }
 

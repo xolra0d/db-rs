@@ -11,7 +11,7 @@ impl CommandRunner {
     pub fn execute_command(command: &str) -> Result<OutputTable> {
         let logical_plan = LogicalPlan::try_from(command)?;
 
-        let logical_plan = logical_plan.optimize_self();
+        let logical_plan = logical_plan.optimize();
 
         let physical_plan = PhysicalPlan::from(logical_plan);
 
@@ -19,7 +19,7 @@ impl CommandRunner {
     }
 
     /// Execution of the physical plan.
-    fn execute_physical_plan(plan: PhysicalPlan) -> Result<OutputTable> {
+    pub fn execute_physical_plan(plan: PhysicalPlan) -> Result<OutputTable> {
         match plan {
             PhysicalPlan::Skip => Ok(OutputTable::build_ok()),
             PhysicalPlan::CreateDatabase { name } => Self::create_database(name),
@@ -30,12 +30,22 @@ impl CommandRunner {
                 order_by,
                 primary_key,
             } => Self::create_table(name, columns, settings, order_by, primary_key),
-            PhysicalPlan::Insert { table_def, columns } => Self::insert(table_def, columns),
+            PhysicalPlan::Insert { table_def, columns } => Self::insert(&table_def, columns),
             PhysicalPlan::Select {
-                table_def,
+                scan_source,
                 columns,
                 filter,
-            } => Self::select(table_def, columns, filter),
+                sort_by,
+                limit,
+                offset,
+            } => Self::select(
+                scan_source,
+                &columns,
+                filter,
+                sort_by.as_ref(),
+                limit,
+                offset,
+            ),
         }
     }
 }

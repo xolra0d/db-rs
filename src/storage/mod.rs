@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use sqlparser::ast::{ObjectName, ObjectNamePart};
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use crate::CONFIG;
 use crate::error::{Error, Result};
@@ -51,12 +51,23 @@ pub struct Column {
 #[derive(Debug, Serialize)]
 pub struct OutputTable {
     pub columns: Vec<Column>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_time: Option<Duration>,
 }
 
 impl OutputTable {
     /// Creates new `OutputTable` with provided columns.
     pub fn new(columns: Vec<Column>) -> Self {
-        Self { columns }
+        Self {
+            columns,
+            execution_time: None,
+        }
+    }
+
+    /// Sets the execution time for this output table.
+    pub fn with_execution_time(mut self, duration: Duration) -> Self {
+        self.execution_time = Some(duration);
+        self
     }
 
     /// Builds a simple OK response table.
@@ -71,6 +82,7 @@ impl OutputTable {
                 },
                 data: vec![Value::String("OK".to_string())],
             }],
+            execution_time: None,
         }
     }
 }

@@ -42,9 +42,7 @@ impl LogicalPlan {
             return Err(Error::DatabaseAlreadyExists);
         }
 
-        Ok(Self::CreateDatabase {
-            name: name.to_string(),
-        })
+        Ok(Self::CreateDatabase { name: name.clone() })
     }
 }
 
