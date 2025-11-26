@@ -2,3 +2,5 @@
 target/
 clients/.venv/
 db_files/
+perf.data*
+todos

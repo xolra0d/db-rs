@@ -1,9 +1,15 @@
 mod command_runner;
 mod execution;
 mod logical_plan;
+mod plan_optimization;
 mod sql_parser;
 
 pub use command_runner::CommandRunner;
+
+use crate::error::{Error, Result};
+use crate::storage::ColumnDef;
+
+use sqlparser::ast::Ident;
 
 /// Validate the name of fields, databases, columns.
 /// Returns true if `name` consists of english alphabet, numbers and underscore
@@ -13,6 +19,17 @@ pub fn validate_name(name: &str) -> bool {
         && name
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+pub fn parse_ident(ident: &Ident, columns: &[ColumnDef]) -> Result<ColumnDef> {
+    if let Some(column_def) = columns.iter().find(|col| col.name == ident.value) {
+        Ok(column_def.clone())
+    } else {
+        Err(Error::ColumnNotFound(format!(
+            "Column specified ({}) was not found",
+            ident.value
+        )))
+    }
 }
 
 #[cfg(test)]

@@ -87,14 +87,20 @@ async fn handle_connection(socket: &mut TcpStream) -> Result<(), Error> {
             break;
         }
 
-        let output = tokio::task::spawn_blocking(move || CommandRunner::execute_command(&value))
-            .await
-            .unwrap_or_else(|e| {
-                error!("Blocking task panicked: {e}");
-                Err(Error::UnsupportedCommand(
-                    "Internal error during query execution".to_string(),
-                ))
-            });
+        let output = tokio::task::spawn_blocking(move || {
+            let start = std::time::Instant::now();
+            let result = CommandRunner::execute_command(&value);
+            let elapsed = start.elapsed();
+
+            result.map(|output_table| output_table.with_execution_time(elapsed))
+        })
+        .await
+        .unwrap_or_else(|e| {
+            error!("SQL task panicked: {e}");
+            Err(Error::Internal(
+                "Internal error during query execution".to_string(),
+            ))
+        });
 
         if let Err(send_error) = transport.send(output).await {
             error!("Failed to send response: {send_error}");

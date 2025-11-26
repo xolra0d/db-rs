@@ -9,8 +9,8 @@ impl ValueType {
     }
 }
 
-pub fn compress_bytes(bytes: &[u8], compression_type: CompressionType) -> Result<Vec<u8>> {
-    match compression_type {
+pub fn compress_bytes(bytes: &[u8], compression_type: &CompressionType) -> Result<Vec<u8>> {
+    match *compression_type {
         CompressionType::LZ4(level) => {
             let output = Vec::new();
             let mut encoder = lz4::EncoderBuilder::new()

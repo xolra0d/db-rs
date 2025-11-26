@@ -1,10 +1,17 @@
-use sqlparser::ast::{Expr, Statement};
+use sqlparser::ast::{BinaryOperator, Expr, Statement};
 use sqlparser::dialect::ClickHouseDialect;
 use sqlparser::parser::Parser;
 
 use crate::error::{Error, Result};
 use crate::storage::table_metadata::TableSettings;
 use crate::storage::{Column, ColumnDef, TableDef};
+
+/// Source for a Scan operation
+#[derive(Debug, PartialEq)]
+pub enum ScanSource {
+    Table(TableDef),
+    Subquery(Box<LogicalPlan>),
+}
 
 /// High level representation of the SQL query.
 #[derive(Debug, PartialEq)]
@@ -33,7 +40,7 @@ pub enum LogicalPlan {
     },
 
     Scan {
-        table: TableDef,
+        source: ScanSource,
     },
 
     Projection {
@@ -43,6 +50,17 @@ pub enum LogicalPlan {
 
     Filter {
         expr: Box<Expr>,
+        plan: Box<LogicalPlan>,
+    },
+
+    OrderBy {
+        column_defs: Vec<Vec<ColumnDef>>,
+        plan: Box<LogicalPlan>,
+    },
+
+    Limit {
+        limit: Option<u64>,
+        offset: u64, // default 0
         plan: Box<LogicalPlan>,
     },
 }
@@ -81,13 +99,6 @@ impl TryFrom<&str> for LogicalPlan {
     }
 }
 
-impl LogicalPlan {
-    /// Plan optimization
-    pub fn optimize_self(self) -> Self {
-        self
-    }
-}
-
 /// Lower level representation of the Logical Plan.
 #[derive(Debug)]
 pub enum PhysicalPlan {
@@ -114,9 +125,12 @@ pub enum PhysicalPlan {
 
     /// Select columns from table.
     Select {
-        table_def: TableDef,
+        scan_source: ScanSource,
         columns: Vec<ColumnDef>,
         filter: Option<Box<Expr>>,
+        sort_by: Option<Vec<Vec<ColumnDef>>>,
+        limit: Option<u64>,
+        offset: u64,
     },
 }
 
@@ -139,26 +153,77 @@ impl From<LogicalPlan> for PhysicalPlan {
                 primary_key,
             },
             LogicalPlan::Insert { table_def, columns } => Self::Insert { table_def, columns },
-            LogicalPlan::Projection { columns, plan } => match *plan {
-                LogicalPlan::Filter { expr, plan } => {
-                    if let LogicalPlan::Scan { table } = *plan {
-                        Self::Select {
-                            table_def: table,
-                            columns,
-                            filter: Some(expr),
+            LogicalPlan::Scan { source } => {
+                Self::Select {
+                    scan_source: source,
+                    columns: Vec::new(), // to be filled,
+                    filter: None,
+                    sort_by: None,
+                    limit: None,
+                    offset: 0,
+                }
+            }
+            plan @ (LogicalPlan::Projection { .. }
+            | LogicalPlan::Filter { .. }
+            | LogicalPlan::OrderBy { .. }
+            | LogicalPlan::Limit { .. }) => {
+                let mut current = plan;
+                let mut columns = None;
+                let mut filter = None;
+                let mut sort_by = None;
+                let mut limit = None;
+                let mut offset = 0;
+
+                loop {
+                    match current {
+                        LogicalPlan::Limit {
+                            limit: limit_val,
+                            offset: offset_val,
+                            plan: inner,
+                        } => {
+                            limit = limit_val;
+                            offset = offset_val;
+                            current = *inner;
                         }
-                    } else {
-                        unimplemented!("Filter without Scan not yet supported")
+                        LogicalPlan::OrderBy {
+                            column_defs,
+                            plan: inner,
+                        } => {
+                            sort_by = Some(column_defs);
+                            current = *inner;
+                        }
+                        LogicalPlan::Projection {
+                            columns: cols,
+                            plan: inner,
+                        } => {
+                            columns = Some(cols);
+                            current = *inner;
+                        }
+                        LogicalPlan::Filter { expr, plan: inner } => {
+                            filter = match filter {
+                                None => Some(expr),
+                                Some(value) => Some(Box::new(Expr::BinaryOp {
+                                    left: value,
+                                    op: BinaryOperator::And,
+                                    right: expr,
+                                })),
+                            };
+                            current = *inner;
+                        }
+                        LogicalPlan::Scan { source } => {
+                            return Self::Select {
+                                scan_source: source,
+                                columns: columns.unwrap_or_default(),
+                                filter,
+                                sort_by,
+                                limit,
+                                offset,
+                            };
+                        }
+                        unexpected => panic!("Unexpected plan node in query: {:?}", unexpected),
                     }
                 }
-                LogicalPlan::Scan { table } => Self::Select {
-                    table_def: table,
-                    columns,
-                    filter: None,
-                },
-                _ => unimplemented!("Projection without Scan not yet supported"),
-            },
-            _ => unimplemented!("Projection without Scan not yet supported"),
+            }
         }
     }
 }

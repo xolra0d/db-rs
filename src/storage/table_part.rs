@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-use crate::engines;
 use crate::engines::EngineConfig;
 use crate::error::{Error, Result};
 use crate::runtime_config::{TABLE_DATA, TableConfig};
@@ -21,8 +20,8 @@ pub const PART_INFO_FILENAME: &str = "part.inf";
 /// compressed granule.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MarkInfo {
-    start: u64,
-    end: u64,
+    pub start: u64,
+    pub end: u64,
 }
 
 /// Represents a first row of each granule as well as it's starting position and ending.
@@ -98,7 +97,6 @@ impl TablePartInfo {
         let mut all_values = Vec::new();
 
         for mark_info in mark_infos {
-            // Adjusting start,end to exclude magic bytes
             let start = (mark_info.start as usize) - MAGIC_BYTES_COLUMN.len();
             let end = (mark_info.end as usize) - MAGIC_BYTES_COLUMN.len();
             let granule_compressed_bytes = &data_bytes[start..end];
@@ -153,10 +151,11 @@ impl TablePart {
             return Err(Error::TableNotFound);
         };
 
-        let engine = engines::get_engine(
-            &table_config.metadata.settings.engine,
-            EngineConfig::default(),
-        );
+        let engine = table_config
+            .metadata
+            .settings
+            .engine
+            .get_engine(EngineConfig::default());
         let data = engine.order_columns(columns, &table_config.metadata.schema.order_by)?;
 
         let marks = generate_indexes(
@@ -228,7 +227,7 @@ impl TablePart {
                 )?;
             let granule_bytes = compress_bytes(
                 &granule_bytes,
-                granule_data[0].get_type().get_optimal_compression(),
+                &granule_data[0].get_type().get_optimal_compression(),
             )?;
             file_bytes.extend(&granule_bytes);
             let end_pos = file_bytes.len() as u64;
@@ -409,7 +408,10 @@ pub fn load_all_parts_on_startup(db_dir: &Path) -> Result<()> {
                     continue;
                 }
 
-                if part_name.ends_with(".old") {
+                if Path::new(&part_path)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("old"))
+                {
                     warn!(
                         "Found old part: {part_name}. Consult the logs to make the decision about removal."
                     );

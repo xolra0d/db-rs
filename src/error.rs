@@ -59,6 +59,14 @@ pub enum Error {
     EmptySource,
     #[display("Permission denied")]
     PermissionDenied,
+    #[display("Unsupported filter: {_0}")]
+    UnsupportedFilter(String),
+    #[display("Column not found: {_0}")]
+    ColumnNotFound(String),
+    #[display("Duplicate column in projection: {_0}")]
+    DuplicateColumn(String),
+    #[display("Invalid limit value: {_0}")]
+    InvalidLimitValue(String),
 
     // mod engines
     #[display("No ORDER BY columns found")]
@@ -66,4 +74,5 @@ pub enum Error {
 
     // mod main
     SendResponse, // does not need display
+    Internal(String),
 }

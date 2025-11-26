@@ -1,6 +1,5 @@
 use crate::engines::{Engine, EngineConfig};
 use crate::error::{Error, Result};
-use crate::storage::value::compare_values;
 use crate::storage::{Column, ColumnDef};
 
 #[allow(dead_code)]
@@ -48,8 +47,10 @@ impl Engine for MergeTreeEngine {
                 let col_a = &columns[col_idx].data[a];
                 let col_b = &columns[col_idx].data[b];
 
-                // If comparison fails, treat values as equal to continue sorting
-                let cmp = compare_values(col_a, col_b).expect("unreachable panic");
+                let cmp = col_a
+                    .partial_cmp(col_b)
+                    .expect("Values in the same column are of the same type and ARE comparable");
+
                 if cmp != std::cmp::Ordering::Equal {
                     return cmp;
                 }
@@ -68,3 +69,5 @@ impl Engine for MergeTreeEngine {
         Ok(columns)
     }
 }
+
+// todo: add tests

@@ -3,7 +3,7 @@ import struct
 import argparse
 import msgpack
 import prettytable
-
+import readline as _
 
 def encode_message(message: str) -> bytes:
     message_bytes = message.encode("utf-8")
@@ -18,7 +18,11 @@ def decode_and_print_table(message_bytes: bytes):
 
     if columns := message.get("Ok"):
         table = prettytable.PrettyTable()
-        for column in columns[0]:
+
+        execution_time = columns[1]
+        columns = columns[0] if columns else []
+
+        for column in columns:
             column_name = column[0][0]
             data = []
             for val in column[1]:
@@ -28,6 +32,13 @@ def decode_and_print_table(message_bytes: bytes):
                     data.append(val)
             table.add_column(column_name, data)
         print(table)
+        print(f"Total rows: {len(columns[0][1]) if columns and len(columns) > 0 else 0}")
+
+        secs = execution_time[0]
+        nanos = execution_time[1]
+        total_ms = secs * 1000 + nanos / 1_000_000
+        print(f"Execution time: {total_ms:.2f} ms")
+
     elif error := message.get("Err"):
         print(f"Error: {error}")
 
@@ -40,7 +51,7 @@ def run(host: str, port: int):
 
         while True:
             sql_command = input("> ")
-            
+
             encoded_command = encode_message(sql_command)
             _ = sock.send(encoded_command)
 
@@ -49,7 +60,16 @@ def run(host: str, port: int):
                 print("Connection ended.")
                 return
             response_length = struct.unpack("<Q", header_bytes)[0]
-            message_bytes = sock.recv(response_length)
+
+            chunks = []
+            bytes_received = 0
+            while bytes_received < response_length:
+                chunk = sock.recv(min(response_length - bytes_received, 4096))
+                if not chunk:
+                    raise ValueError("Connection closed before complete message received")
+                chunks.append(chunk)
+                bytes_received += len(chunk)
+            message_bytes = b''.join(chunks)
 
             print()
             decode_and_print_table(message_bytes)
