@@ -1,6 +1,6 @@
+use crate::error::Result;
 use crate::runtime_config::TABLE_DATA;
 use crate::storage::{Column, TableDef, TablePart, TablePartInfo, Value};
-use crate::error::Result;
 
 use log::{error, info, warn};
 use uuid::Uuid;
@@ -8,7 +8,8 @@ use uuid::Uuid;
 pub struct BackgroundMerge;
 
 impl BackgroundMerge {
-    pub fn start() { // todo: add check for resources availability (selects/sec)
+    pub fn start() {
+        // todo: add check for resources availability (selects/sec)
         info!("Background merges started");
         loop {
             let Some(merge_data) = find_two_parts() else {
@@ -18,7 +19,7 @@ impl BackgroundMerge {
 
             let Some((part_0_cols, part_1_cols)) = Self::load_both_parts(&merge_data) else {
                 std::thread::sleep(std::time::Duration::from_secs(1));
-                continue
+                continue;
             };
 
             let merged = Self::merge_parts(part_0_cols, part_1_cols);
@@ -58,8 +59,7 @@ impl BackgroundMerge {
             }
         }
         for (col_idx, column_def) in part.column_defs.iter().enumerate() {
-            let val = part
-                .read_column(table_def, column_def, marks[col_idx].as_slice())?;
+            let val = part.read_column(table_def, column_def, marks[col_idx].as_slice())?;
             columns.push(val);
         }
         Ok(columns)
@@ -86,25 +86,25 @@ impl BackgroundMerge {
     }
 
     fn load_both_parts(merge_data: &MergeData) -> Option<(Vec<Column>, Vec<Column>)> {
-        let part_0_cols = Self::load_part(&merge_data.table_def, &merge_data.part_0).map_err(
-            |error| {
+        let part_0_cols = Self::load_part(&merge_data.table_def, &merge_data.part_0)
+            .map_err(|error| {
                 error!(
-                        "Error loading part ({}): {error:?}",
-                        &merge_data.part_0.name
-                    );
+                    "Error loading part ({}): {error:?}",
+                    &merge_data.part_0.name
+                );
                 error
-            }
-        ).ok()?;
+            })
+            .ok()?;
 
-        let part_1_cols = Self::load_part(&merge_data.table_def, &merge_data.part_1).map_err(
-            |error| {
+        let part_1_cols = Self::load_part(&merge_data.table_def, &merge_data.part_1)
+            .map_err(|error| {
                 error!(
-                        "Error loading part ({}): {error:?}",
-                        &merge_data.part_1.name
-                    );
+                    "Error loading part ({}): {error:?}",
+                    &merge_data.part_1.name
+                );
                 error
-            }
-        ).ok()?;
+            })
+            .ok()?;
 
         Some((part_0_cols, part_1_cols))
     }
@@ -133,17 +133,17 @@ impl BackgroundMerge {
             .join(format!("{}.old", &merge_data.part_1.name));
 
         if std::fs::rename(&part_0_old, &part_0_new).is_err() {
-            warn!("Could not rename normal part to old: {part_0_old}");
+            warn!("Could not rename normal part to old: {}", part_0_old.display());
             return false;
         }
 
         if std::fs::rename(&part_1_old, &part_1_new).is_err() {
             if let Err(error) = std::fs::rename(&part_0_new, part_0_old) {
                 error!(
-                        "Couldn't move part ({}). Remove `.old` extension and solve the issue: {}",
-                        part_0_new.display(),
-                        error
-                    );
+                    "Couldn't move part ({}). Remove `.old` extension and solve the issue: {}",
+                    part_0_new.display(),
+                    error
+                );
             }
             return false;
         }
@@ -158,19 +158,19 @@ impl BackgroundMerge {
             };
             if let Err(error) = std::fs::rename(&part_0_new, &part_0_old) {
                 error!(
-                        "Couldn't move part ({}). Remove `.old` extension and solve the issue: {}",
-                        part_0_new.display(),
-                        error
-                    );
+                    "Couldn't move part ({}). Remove `.old` extension and solve the issue: {}",
+                    part_0_new.display(),
+                    error
+                );
             } else {
                 config.infos.push(merge_data.part_0);
             }
             if let Err(error) = std::fs::rename(&part_1_new, &part_1_old) {
                 error!(
-                        "Couldn't move part ({}). Remove `.old` extension and solve the issue: {}",
-                        part_1_new.display(),
-                        error
-                    );
+                    "Couldn't move part ({}). Remove `.old` extension and solve the issue: {}",
+                    part_1_new.display(),
+                    error
+                );
             } else {
                 config.infos.push(merge_data.part_1);
             }
@@ -179,17 +179,17 @@ impl BackgroundMerge {
 
         if let Err(error) = std::fs::remove_dir_all(&part_0_new) {
             warn!(
-                    "Couldn't remove ({}). Remove directory and solve the issue: {}",
-                    part_0_new.display(),
-                    error
-                );
+                "Couldn't remove ({}). Remove directory and solve the issue: {}",
+                part_0_new.display(),
+                error
+            );
         }
         if let Err(error) = std::fs::remove_dir_all(&part_1_new) {
             warn!(
-                    "Couldn't remove ({}). Remove directory and solve the issue: {}",
-                    part_1_new.display(),
-                    error
-                );
+                "Couldn't remove ({}). Remove directory and solve the issue: {}",
+                part_1_new.display(),
+                error
+            );
         }
         true
     }
