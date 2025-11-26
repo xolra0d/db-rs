@@ -133,7 +133,10 @@ impl BackgroundMerge {
             .join(format!("{}.old", &merge_data.part_1.name));
 
         if std::fs::rename(&part_0_old, &part_0_new).is_err() {
-            warn!("Could not rename normal part to old: {}", part_0_old.display());
+            warn!(
+                "Could not rename normal part to old: {}",
+                part_0_old.display()
+            );
             return false;
         }
 
