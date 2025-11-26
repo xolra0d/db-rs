@@ -67,8 +67,6 @@ pub enum Error {
     DuplicateColumn(String),
     #[display("Invalid limit value: {_0}")]
     InvalidLimitValue(String),
-    #[display("Multiple ORDER BY expressions not supported yet")]
-    MultipleOrderByNotSupported,
 
     // mod engines
     #[display("No ORDER BY columns found")]

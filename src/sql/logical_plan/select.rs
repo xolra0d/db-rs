@@ -131,20 +131,20 @@ impl LogicalPlan {
             match &order_by.kind {
                 OrderByKind::All(_params) => {
                     plan = LogicalPlan::OrderBy {
-                        column_defs: vec![read_columns], // todo save as Cow<> of projection maybe?
+                        column_defs: vec![read_columns], // todo save as Cow<> of projection maybe, or even indexes?
                         plan: Box::new(plan),
                     };
                 }
-                OrderByKind::Expressions(col_defs) => {
-                    if col_defs.len() != 1 {
-                        return Err(Error::MultipleOrderByNotSupported);
+                OrderByKind::Expressions(order_by_given) => {
+                    let mut order_by_all = Vec::with_capacity(order_by_given.len());
+                    for order_by_expr in order_by_given {
+                        let order_by_cols =
+                            Self::parse_primary_key(&order_by_expr.expr, &available_columns)?; // OrderBy cols is interpreted in the same way as PK in `CREATE TABLE`
+                        order_by_all.push(order_by_cols);
                     }
 
-                    let order_by_cols =
-                        Self::parse_primary_key(&col_defs[0].expr, &available_columns)?; // OrderBy cols is interpreted in the same way as PK in `CREATE TABLE`
-
                     plan = LogicalPlan::OrderBy {
-                        column_defs: vec![order_by_cols],
+                        column_defs: order_by_all,
                         plan: Box::new(plan),
                     };
                 }
