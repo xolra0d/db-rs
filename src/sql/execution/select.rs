@@ -252,7 +252,9 @@ impl CommandRunner {
             Expr::Identifier(_) => {
                 Ok((0..marks.len()).collect()) // todo: replace when minmax index is introduced
             }
-            _ => unimplemented!(),
+            expr => Err(Error::UnsupportedFilter(format!(
+                "Unsupported expression type in filter: {expr}"
+            ))),
         }
     }
 
@@ -413,7 +415,9 @@ impl CommandRunner {
                     Ok(true)
                 }
             }
-            _ => unimplemented!(),
+            expr => Err(Error::UnsupportedFilter(format!(
+                "Unsupported expression type in filter: {expr}"
+            ))),
         }
     }
 

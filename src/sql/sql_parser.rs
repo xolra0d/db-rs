@@ -220,7 +220,7 @@ impl From<LogicalPlan> for PhysicalPlan {
                                 offset,
                             };
                         }
-                        _ => unimplemented!("Query plan must end with Scan"),
+                        unexpected => panic!("Unexpected plan node in query: {:?}", unexpected),
                     }
                 }
             }
