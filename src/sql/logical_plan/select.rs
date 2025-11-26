@@ -10,9 +10,6 @@ use crate::storage::{ColumnDef, TableDef};
 
 impl LogicalPlan {
     pub fn from_query(query: &Query) -> Result<Self> {
-        // dbg!(&query);
-        // return Ok(Self::Skip);
-
         let SetExpr::Select(select) = &*query.body else {
             return Err(Error::UnsupportedCommand(
                 "Only SELECT queries are supported".to_string(),

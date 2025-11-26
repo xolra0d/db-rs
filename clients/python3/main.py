@@ -3,7 +3,7 @@ import struct
 import argparse
 import msgpack
 import prettytable
-import readline
+import readline as _
 
 def encode_message(message: str) -> bytes:
     message_bytes = message.encode("utf-8")
@@ -32,8 +32,8 @@ def decode_and_print_table(message_bytes: bytes):
                     data.append(val)
             table.add_column(column_name, data)
         print(table)
-        print(f"Total rows: {len(columns[0][1]) if columns else 0}")
-        
+        print(f"Total rows: {len(columns[0][1]) if columns and len(columns) > 0 else 0}")
+
         secs = execution_time[0]
         nanos = execution_time[1]
         total_ms = secs * 1000 + nanos / 1_000_000
