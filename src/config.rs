@@ -19,7 +19,10 @@ max_connections = 100
 # - 1 => Info
 # - 2 => Warn
 # - 3 => Error
-log_level = 1"#;
+log_level = 1
+
+# Signifies when database can do background merges of parts, depending on database load
+background_merge_available_under = 30"#;
 
 /// Server configuration
 #[derive(Debug, Deserialize)]
@@ -33,9 +36,11 @@ pub struct Config {
     /// - 1 => Info
     /// - 2 => Warn
     /// - 3 => Error
-    log_level: usize,
+    log_level: u8,
     /// Max concurrent connections.
     max_connections: usize,
+    /// Signifies when database can do background merges of parts, depending on database load
+    background_merge_available_under: u32,
 }
 
 impl Config {
@@ -63,6 +68,12 @@ impl Config {
         self.max_connections
     }
 
+    /// Provides the background merge availability threshold.
+    ///
+    /// The threshold value used to determine when background merges are allowed.
+    pub const fn get_background_merge_available_under(&self) -> u32 {
+        self.background_merge_available_under
+    }
     /// Ensures that directory exists and is indeed directory. Creates one, if not exists
     ///
     /// # Panics:
