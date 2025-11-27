@@ -243,7 +243,7 @@ impl LogicalPlan {
     ) -> Result<Constraints> {
         let mut nullable = None;
         let mut default = None;
-        let compression_type = None; // currently `sqlparser` does not support `CODEC(compression_type)` param
+        let compression_type = column_type.get_optimal_compression(); // currently `sqlparser` does not support `CODEC(compression_type)` param
 
         for option in options {
             match &option.option {
@@ -275,7 +275,7 @@ impl LogicalPlan {
         Ok(Constraints {
             nullable: nullable.unwrap_or(true),
             default,
-            compression_type: compression_type.unwrap_or(column_type.get_optimal_compression()),
+            compression_type,
         })
     }
 }

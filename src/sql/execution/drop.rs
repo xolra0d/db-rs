@@ -47,7 +47,8 @@ impl CommandRunner {
             (Err(error), _) => Err(Error::Internal(format!(
                 "Could not remove database entry from disk: {}. Stop database, remove {:?} folder, and restart the database.",
                 error,
-                std::path::absolute(CONFIG.get_db_dir().join(name)).unwrap_or(CONFIG.get_db_dir().join(name)),
+                std::path::absolute(CONFIG.get_db_dir().join(name))
+                    .unwrap_or(CONFIG.get_db_dir().join(name)),
             ))),
         }
     }

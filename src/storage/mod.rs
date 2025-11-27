@@ -11,11 +11,11 @@ use std::time::{Duration, SystemTime};
 
 use crate::CONFIG;
 use crate::error::{Error, Result};
+pub use crate::storage::compression::CompressionType;
 use crate::storage::table_metadata::TABLE_METADATA_FILENAME;
 pub use crate::storage::table_metadata::{TableMetadata, TableSchema, TableSettings};
 pub use crate::storage::table_part::{Mark, TablePart, TablePartInfo, load_all_parts_on_startup};
 pub use crate::storage::value::{Value, ValueType};
-pub use crate::storage::compression::CompressionType;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Constraints {
