@@ -12,10 +12,7 @@ impl LogicalPlan {
         match object_type {
             ObjectType::Table => {
                 if names.len() != 1 {
-                    return Err(Error::InvalidNumberOfParamsSpecified(format!(
-                        "expected only one table name, got {}",
-                        names.len()
-                    )));
+                    return Err(Error::InvalidDatabaseName);
                 }
                 let name = &names[0];
 

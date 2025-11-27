@@ -239,7 +239,10 @@ impl CommandRunner {
                         .filter(|idx| !not_to_include.contains(idx))
                         .collect())
                 } else {
-                    Err(Error::InvalidSource)
+                    Err(Error::InvalidSource(
+                        "Currently do not support filters with unary operators except NOT"
+                            .to_string(),
+                    ))
                 }
             }
             Expr::Value(value) => {
@@ -274,14 +277,13 @@ impl CommandRunner {
                 let left = parse_ident(&left, pk_col_defs)?;
                 let right = Value::try_from((right.value, &left.field_type))?;
 
-                if left.field_type != right.get_type() {
-                    return Err(Error::InvalidSource);
-                }
-
                 let left_index = pk_col_defs
                     .iter()
                     .position(|col| col.name == left.name)
-                    .ok_or(Error::InvalidSource)?;
+                    .ok_or(Error::InvalidSource(format!(
+                        "Column ({}) is not found in primary key.",
+                        left.name
+                    )))?;
 
                 let values: Vec<&Value> =
                     marks.iter().map(|mark| &mark.index[left_index]).collect();
@@ -393,7 +395,10 @@ impl CommandRunner {
                     Self::parse_complex_filter_row_is_allowed(row_column_defs, row_values, *expr)
                         .map(|x| !x)
                 } else {
-                    Err(Error::InvalidSource)
+                    Err(Error::InvalidSource(
+                        "Currently do not support filters with unary operators except NOT"
+                            .to_string(),
+                    ))
                 }
             }
             Expr::Value(value) => {
@@ -408,11 +413,17 @@ impl CommandRunner {
                     .iter()
                     .position(|col_def| col_def.name == ident.value)
                 else {
-                    return Err(Error::InvalidSource);
+                    return Err(Error::InvalidSource(format!(
+                        "Column ({}) is not found in columns.",
+                        ident.value
+                    )));
                 };
-                let value = row_values
-                    .get(column_position)
-                    .ok_or(Error::InvalidSource)?;
+                let value =
+                    row_values
+                        .get(column_position)
+                        .ok_or(Error::InvalidSource(format!(
+                            "Value (idx: {column_position}) is not found in columns."
+                        )))?;
                 if let Value::Bool(value) = value {
                     Ok(*value)
                 } else {
@@ -445,7 +456,10 @@ impl CommandRunner {
 
                 let Some(left_pos) = row_column_defs.iter().position(|col_def| *col_def == left)
                 else {
-                    return Err(Error::InvalidSource);
+                    return Err(Error::InvalidSource(format!(
+                        "Column '{}' not found in row",
+                        left.name
+                    )));
                 };
                 let left = row_values[left_pos].clone();
 
@@ -468,25 +482,37 @@ impl CommandRunner {
 
                 let Some(left_pos) = row_column_defs.iter().position(|col_def| *col_def == left)
                 else {
-                    return Err(Error::InvalidSource);
+                    return Err(Error::InvalidSource(format!(
+                        "Column '{}' not found in row",
+                        left.name
+                    )));
                 };
                 let left = row_values[left_pos].clone();
 
                 let Some(right_pos) = row_column_defs.iter().position(|col_def| *col_def == right)
                 else {
-                    return Err(Error::InvalidSource);
+                    return Err(Error::InvalidSource(format!(
+                        "Column '{}' not found in row",
+                        right.name
+                    )));
                 };
                 let right = row_values[right_pos].clone();
 
                 Self::evaluate_binary_op(&op, &left, &right)
             }
-            _ => Err(Error::InvalidSource),
+            _ => Err(Error::InvalidSource(
+                "Unsupported comparison operands in filter".to_string(),
+            )),
         }
     }
 
     fn evaluate_binary_op(op: &BinOp, left: &Value, right: &Value) -> Result<bool> {
         if left.get_type() != right.get_type() {
-            return Err(Error::InvalidSource);
+            return Err(Error::InvalidSource(format!(
+                "Type mismatch in comparison: {:?} vs {:?}",
+                left.get_type(),
+                right.get_type()
+            )));
         }
 
         Ok(match op {
@@ -510,11 +536,15 @@ impl CommandRunner {
             SQLValue::SingleQuotedString(s)
             | SQLValue::TripleSingleQuotedString(s)
             | SQLValue::TripleDoubleQuotedString(s) => Ok(Value::String(s)),
-            SQLValue::Number(number, _) => Ok(Value::Int64(
-                number.parse().map_err(|_| Error::InvalidSource)?,
-            )),
+            SQLValue::Number(number, _) => {
+                Ok(Value::Int64(number.parse().map_err(|_| {
+                    Error::InvalidSource(format!("Failed to parse number: {number}"))
+                })?))
+            }
             SQLValue::Boolean(b) => Ok(Value::Bool(b)),
-            _ => Err(Error::InvalidSource),
+            _ => Err(Error::InvalidSource(format!(
+                "Unsupported SQL value type: {value:?}"
+            ))),
         }
     }
 
@@ -556,7 +586,9 @@ impl CommandRunner {
             BinOp::Gt => BinOp::Lt,
             BinOp::GtEq => BinOp::LtEq,
             BinOp::Eq | BinOp::NotEq => op,
-            _ => return Err(Error::InvalidSource),
+            _ => {
+                return Err(Error::InvalidSource(format!("Cannot flip operator: {op}")));
+            }
         })
     }
 }
@@ -566,7 +598,7 @@ mod tests {
     mod parse_single_binary_cmp {
         use crate::error::Result;
         use crate::sql::CommandRunner;
-        use crate::storage::{ColumnDef, CompressionType, Mark, Value, ValueType};
+        use crate::storage::{ColumnDef, Constraints, Mark, Value, ValueType};
         use sqlparser::ast::{
             BinaryOperator as BinOp, Expr, Ident, Value as SQLValue, ValueWithSpan,
         };
@@ -607,8 +639,7 @@ mod tests {
             let column_defs = vec![ColumnDef {
                 name: "id".to_string(),
                 field_type: ValueType::Int64,
-                constraints: vec![],
-                compression_type: CompressionType::None,
+                constraints: Constraints::default(),
             }];
 
             (marks, column_defs)

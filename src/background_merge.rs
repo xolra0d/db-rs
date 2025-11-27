@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::runtime_config::TABLE_DATA;
-use crate::storage::{Column, TableDef, TablePart, TablePartInfo, Value};
+use crate::storage::{Column, TableDef, TablePart, TablePartInfo};
 
 use log::{error, info, warn};
 use uuid::Uuid;
@@ -73,7 +73,13 @@ impl BackgroundMerge {
             {
                 part_0[position].data.extend(column_1.data.into_iter()); // parts are guaranteed to be non-empty.
             } else {
-                let mut data = vec![Value::Null; part_0[0].data.len()];
+                let default_value = column_1
+                    .column_def
+                    .constraints
+                    .default
+                    .clone()
+                    .unwrap_or_default();
+                let mut data = vec![default_value; part_0[0].data.len()];
                 data.extend(column_1.data.into_iter());
                 part_0.push(Column {
                     column_def: column_1.column_def.clone(),

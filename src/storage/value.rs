@@ -1,4 +1,3 @@
-use derive_more::Display;
 use serde::{Deserialize, Serialize};
 use sqlparser::ast::{DataType as SQLDatatype, Value as SQLValue};
 use std::cmp::Ordering;
@@ -7,34 +6,22 @@ use uuid::Uuid;
 use crate::error::{Error, Result};
 
 /// Represents a parsed value in our custom protocol
-#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize, Display)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub enum Value {
     #[default]
-    #[display("Null")]
     Null,
-    #[display("String({_0})")]
     String(String),
-    #[display("Uuid({_0})")]
     Uuid(Uuid),
-    #[display("Bool({_0})")]
     Bool(bool),
 
-    #[display("Int8({_0})")]
     Int8(i8),
-    #[display("Int16({_0})")]
     Int16(i16),
-    #[display("Int32({_0})")]
     Int32(i32),
-    #[display("Int64({_0})")]
     Int64(i64),
 
-    #[display("UInt8({_0})")]
     UInt8(u8),
-    #[display("UInt16({_0})")]
     UInt16(u16),
-    #[display("UInt32({_0})")]
     UInt32(u32),
-    #[display("UInt64({_0})")]
     UInt64(u64),
 }
 
@@ -51,14 +38,18 @@ impl TryFrom<(SQLValue, &ValueType)> for Value {
                 if value_type == &ValueType::String {
                     Ok(Self::String(string))
                 } else if value_type == &ValueType::Uuid {
-                    let uuid = Uuid::parse_str(&string).map_err(|_| Error::InvalidSource)?;
+                    let uuid = Uuid::parse_str(&string).map_err(|error| {
+                        Error::InvalidSource(format!("Could not parse uuid: {error}"))
+                    })?;
                     Ok(Self::Uuid(uuid))
                 } else {
-                    Err(Error::InvalidSource)
+                    Err(Error::InvalidSource(format!(
+                        "Could not convert {string} to {value_type:?}",
+                    )))
                 }
             }
             SQLValue::Number(number, _) => {
-                let parse_err = |_| Error::InvalidSource;
+                let parse_err = |_| Error::InvalidSource("Could not parse number".to_string());
                 match value_type {
                     ValueType::Int8 => Ok(Self::Int8(number.parse().map_err(parse_err)?)),
                     ValueType::Int16 => Ok(Self::Int16(number.parse().map_err(parse_err)?)),
@@ -75,7 +66,9 @@ impl TryFrom<(SQLValue, &ValueType)> for Value {
             }
             SQLValue::Boolean(bool_value) => {
                 if value_type != &ValueType::Bool {
-                    return Err(Error::InvalidSource);
+                    return Err(Error::InvalidSource(format!(
+                        "Could not convert boolean value to {value_type:?}"
+                    )));
                 }
                 Ok(Self::Bool(bool_value))
             }

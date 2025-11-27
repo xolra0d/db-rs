@@ -9,7 +9,7 @@ use crate::error::{Error, Result};
 use crate::sql::sql_parser::LogicalPlan;
 use crate::sql::{parse_ident, validate_name};
 use crate::storage::table_metadata::TableSettings;
-use crate::storage::{ColumnDef, ColumnDefConstraint, ColumnDefOption, TableDef, ValueType};
+use crate::storage::{ColumnDef, Constraints, TableDef, Value, ValueType};
 
 impl LogicalPlan {
     /// Create a table as directory and .metadata file.
@@ -57,14 +57,12 @@ impl LogicalPlan {
 
             let field_type = ValueType::try_from(&table_column.data_type)?;
 
-            let constraints = Self::parse_column_constraints(&table_column.options)?;
-            let compression_type = field_type.get_optimal_compression();
+            let constraints = Self::parse_column_constraints(&table_column.options, &field_type)?;
 
             columns.push(ColumnDef {
                 name: column_name.clone(),
                 field_type,
                 constraints,
-                compression_type,
             });
         }
 
@@ -241,46 +239,44 @@ impl LogicalPlan {
     ///     2. Unsupported column constraint is provided: `UnsupportedColumnConstraint`
     pub fn parse_column_constraints(
         options: &[ColumnOptionDef],
-    ) -> Result<Vec<ColumnDefConstraint>> {
-        let mut result = Vec::with_capacity(options.len());
-        let mut null_found = false;
+        column_type: &ValueType,
+    ) -> Result<Constraints> {
+        let mut nullable = None;
+        let mut default = None;
+        let compression_type = None; // currently `sqlparser` does not support `CODEC(compression_type)` param
 
         for option in options {
-            let option_type = match option.option {
-                ColumnOption::Null => {
-                    if null_found {
+            match &option.option {
+                constraint @ (ColumnOption::Null | ColumnOption::NotNull) => {
+                    if nullable.is_some() {
                         return Err(Error::UnsupportedColumnConstraint(
                             "Invalid NULL constraint".to_string(),
                         ));
                     }
-
-                    null_found = true;
-                    ColumnDefOption::Null
+                    nullable = Some(matches!(constraint, ColumnOption::Null));
                 }
-                ColumnOption::NotNull => {
-                    if null_found {
+                ColumnOption::Default(expr) => {
+                    let Expr::Value(value) = expr else {
                         return Err(Error::UnsupportedColumnConstraint(
-                            "Invalid NULL constraint".to_string(),
+                            "Non-literal default values are not supported".to_string(),
                         ));
-                    }
-
-                    null_found = true;
-                    ColumnDefOption::NotNull
+                    };
+                    let value = Value::try_from((value.value.clone(), column_type))?;
+                    default = Some(value);
                 }
                 _ => {
                     return Err(Error::UnsupportedColumnConstraint(
                         option.option.to_string(),
                     ));
                 }
-            };
-
-            result.push(ColumnDefConstraint {
-                name: None,
-                option: option_type,
-            });
+            }
         }
 
-        Ok(result)
+        Ok(Constraints {
+            nullable: nullable.unwrap_or(true),
+            default,
+            compression_type: compression_type.unwrap_or(column_type.get_optimal_compression()),
+        })
     }
 }
 
@@ -300,17 +296,28 @@ mod tests {
             option: ColumnOption::Null,
         };
 
-        let result = LogicalPlan::parse_column_constraints(&[not_null_option]);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().len(), 1);
+        let result = LogicalPlan::parse_column_constraints(&[not_null_option], &ValueType::String);
+        assert_eq!(
+            result.unwrap(),
+            Constraints {
+                nullable: false,
+                default: None,
+                compression_type: ValueType::String.get_optimal_compression(),
+            }
+        );
 
-        let result = LogicalPlan::parse_column_constraints(&[null_option]);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().len(), 1);
+        let result = LogicalPlan::parse_column_constraints(&[null_option], &ValueType::String);
+        assert_eq!(
+            result.unwrap(),
+            Constraints {
+                nullable: true,
+                default: None,
+                compression_type: ValueType::String.get_optimal_compression(),
+            }
+        );
 
-        let result = LogicalPlan::parse_column_constraints(&[]);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().len(), 0);
+        let result = LogicalPlan::parse_column_constraints(&[], &ValueType::String);
+        assert_eq!(result.unwrap(), Constraints::default());
     }
 
     #[test]
@@ -324,7 +331,10 @@ mod tests {
             option: ColumnOption::Null,
         };
 
-        let result = LogicalPlan::parse_column_constraints(&[not_null_option, null_option]);
+        let result = LogicalPlan::parse_column_constraints(
+            &[not_null_option, null_option],
+            &ValueType::String,
+        );
         assert!(result.is_err());
 
         let unique_option = ColumnOptionDef {
@@ -334,7 +344,7 @@ mod tests {
                 characteristics: None,
             },
         };
-        let result = LogicalPlan::parse_column_constraints(&[unique_option]);
+        let result = LogicalPlan::parse_column_constraints(&[unique_option], &ValueType::String);
         assert!(result.is_err());
     }
 
@@ -343,14 +353,12 @@ mod tests {
         let col1 = ColumnDef {
             name: "id".to_string(),
             field_type: ValueType::UInt32,
-            constraints: vec![],
-            compression_type: crate::storage::CompressionType::None,
+            constraints: Constraints::default(),
         };
         let col2 = ColumnDef {
             name: "name".to_string(),
             field_type: ValueType::String,
-            constraints: vec![],
-            compression_type: crate::storage::CompressionType::None,
+            constraints: Constraints::default(),
         };
         let columns = vec![col1, col2];
 
@@ -377,14 +385,12 @@ mod tests {
         let col1 = ColumnDef {
             name: "id".to_string(),
             field_type: ValueType::UInt32,
-            constraints: vec![],
-            compression_type: crate::storage::CompressionType::None,
+            constraints: Constraints::default(),
         };
         let col2 = ColumnDef {
             name: "name".to_string(),
             field_type: ValueType::String,
-            constraints: vec![],
-            compression_type: crate::storage::CompressionType::None,
+            constraints: Constraints::default(),
         };
         let columns = vec![col1, col2];
 

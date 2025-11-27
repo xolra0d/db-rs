@@ -142,8 +142,11 @@ impl TablePart {
         columns: Vec<Column>,
         name: Option<String>,
     ) -> Result<Self> {
-        if columns.is_empty() || columns[0].data.is_empty() {
-            return Err(Error::InvalidSource);
+        if columns.is_empty() {
+            return Err(Error::InvalidSource("No columns provided".to_string()));
+        }
+        if columns[0].data.is_empty() {
+            return Err(Error::InvalidSource("No data provided".to_string()));
         }
         let name = name.unwrap_or(Uuid::now_v7().to_string());
 
