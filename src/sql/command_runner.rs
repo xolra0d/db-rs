@@ -31,6 +31,8 @@ impl CommandRunner {
                 primary_key,
             } => Self::create_table(name, columns, settings, order_by, primary_key),
             PhysicalPlan::Insert { table_def, columns } => Self::insert(&table_def, columns),
+            PhysicalPlan::DropDatabase { name, if_exists } => Self::drop_database(&name, if_exists),
+            PhysicalPlan::DropTable { name, if_exists } => Self::drop_table(&name, if_exists),
             PhysicalPlan::Select {
                 scan_source,
                 columns,

@@ -39,6 +39,16 @@ pub enum LogicalPlan {
         columns: Vec<Column>,
     },
 
+    DropDatabase {
+        name: String,
+        if_exists: bool,
+    },
+
+    DropTable {
+        name: TableDef,
+        if_exists: bool,
+    },
+
     Scan {
         source: ScanSource,
     },
@@ -94,6 +104,13 @@ impl TryFrom<&str> for LogicalPlan {
             Statement::Insert(insert) => Self::from_insert(insert),
             Statement::Query(query) => Self::from_query(query),
 
+            Statement::Drop {
+                object_type,
+                if_exists,
+                names,
+                ..
+            } => Self::from_drop(object_type, *if_exists, names),
+
             statement => Err(Error::UnsupportedCommand(statement.to_string())),
         }
     }
@@ -106,7 +123,9 @@ pub enum PhysicalPlan {
     Skip,
 
     /// Create a database.
-    CreateDatabase { name: String },
+    CreateDatabase {
+        name: String,
+    },
 
     /// Create a table.
     CreateTable {
@@ -121,6 +140,16 @@ pub enum PhysicalPlan {
     Insert {
         table_def: TableDef,
         columns: Vec<Column>,
+    },
+
+    DropDatabase {
+        name: String,
+        if_exists: bool,
+    },
+
+    DropTable {
+        name: TableDef,
+        if_exists: bool,
     },
 
     /// Select columns from table.
@@ -153,6 +182,9 @@ impl From<LogicalPlan> for PhysicalPlan {
                 primary_key,
             },
             LogicalPlan::Insert { table_def, columns } => Self::Insert { table_def, columns },
+            LogicalPlan::DropDatabase { name, if_exists } => Self::DropDatabase { name, if_exists },
+            LogicalPlan::DropTable { name, if_exists } => Self::DropTable { name, if_exists },
+
             LogicalPlan::Scan { source } => {
                 Self::Select {
                     scan_source: source,

@@ -10,7 +10,9 @@ impl LogicalPlan {
             Self::Skip
             | Self::CreateDatabase { .. }
             | Self::CreateTable { .. }
-            | Self::Insert { .. } => self,
+            | Self::Insert { .. }
+            | Self::DropDatabase { .. }
+            | Self::DropTable { .. } => self,
             plan => plan
                 .merge_scans()
                 .merge_filters(Vec::new())
@@ -50,7 +52,9 @@ impl LogicalPlan {
             Self::Skip
             | Self::CreateDatabase { .. }
             | Self::CreateTable { .. }
-            | Self::Insert { .. } => unreachable!(), // it's already filtered by `flatten`
+            | Self::Insert { .. }
+            | Self::DropDatabase { .. }
+            | Self::DropTable { .. } => unreachable!(), // it's already filtered by `flatten`
         }
     }
 
@@ -91,7 +95,9 @@ impl LogicalPlan {
             Self::Skip
             | Self::CreateDatabase { .. }
             | Self::CreateTable { .. }
-            | Self::Insert { .. } => unreachable!(), // it's already filtered by `flatten`
+            | Self::Insert { .. }
+            | Self::DropDatabase { .. }
+            | Self::DropTable { .. } => unreachable!(), // it's already filtered by `flatten`
         }
     }
 
@@ -133,7 +139,9 @@ impl LogicalPlan {
             Self::Skip
             | Self::CreateDatabase { .. }
             | Self::CreateTable { .. }
-            | Self::Insert { .. } => unreachable!(), // it's already filtered by `flatten`
+            | Self::Insert { .. }
+            | Self::DropDatabase { .. }
+            | Self::DropTable { .. } => unreachable!(), // it's already filtered by `flatten`
         }
     }
 
@@ -169,7 +177,9 @@ impl LogicalPlan {
             Self::Skip
             | Self::CreateDatabase { .. }
             | Self::CreateTable { .. }
-            | Self::Insert { .. } => unreachable!(), // it's already filtered by `flatten`
+            | Self::Insert { .. }
+            | Self::DropDatabase { .. }
+            | Self::DropTable { .. } => unreachable!(), // it's already filtered by `flatten`
             Self::Filter { .. } | Self::Scan { .. } => unreachable!(), // no need to check for filter/scan, as each select MUST have `Self::Projection`
         }
     }
@@ -204,7 +214,9 @@ impl LogicalPlan {
             Self::Skip
             | Self::CreateDatabase { .. }
             | Self::CreateTable { .. }
-            | Self::Insert { .. } => unreachable!(), // it's already filtered by `flatten`
+            | Self::Insert { .. }
+            | Self::DropDatabase { .. }
+            | Self::DropTable { .. } => unreachable!(), // it's already filtered by `flatten`
             Self::Filter { .. } | Self::Scan { .. } => unreachable!(), // no need to check for filter/scan, as each select MUST have `Self::Projection`
         }
     }

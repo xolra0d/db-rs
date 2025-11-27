@@ -67,6 +67,8 @@ pub enum Error {
     DuplicateColumn(String),
     #[display("Invalid limit value: {_0}")]
     InvalidLimitValue(String),
+    #[display("Invalid number of params specified: {_0}")]
+    InvalidNumberOfParamsSpecified(String),
 
     // mod engines
     #[display("No ORDER BY columns found")]
