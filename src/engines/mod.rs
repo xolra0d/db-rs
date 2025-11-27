@@ -1,6 +1,8 @@
 mod merge_tree;
+mod replacing_merge_tree;
 
 use crate::engines::merge_tree::MergeTreeEngine;
+use crate::engines::replacing_merge_tree::ReplacingMergeTreeEngine;
 use crate::error::{Error, Result};
 use crate::storage::Column;
 use crate::storage::ColumnDef;
@@ -9,13 +11,19 @@ use serde::{Deserialize, Serialize};
 /// Interface for every engine to follow.
 pub trait Engine {
     /// Orders columns for insert by `order_by`.
-    fn order_columns(&self, columns: Vec<Column>, order_by: &[ColumnDef]) -> Result<Vec<Column>>;
+    fn order_columns(
+        &self,
+        columns: Vec<Column>,
+        order_by: &[ColumnDef],
+        primary_key: &[ColumnDef],
+    ) -> Result<Vec<Column>>;
 }
 
 /// Used for storing engine name in metadata.
 #[derive(Debug, Serialize, Deserialize, Eq, Hash, PartialEq, Clone)]
 pub enum EngineName {
     MergeTree,
+    ReplacingMergeTree,
 }
 
 impl TryFrom<&str> for EngineName {
@@ -23,6 +31,7 @@ impl TryFrom<&str> for EngineName {
     fn try_from(value: &str) -> Result<Self> {
         match value {
             "MergeTree" => Ok(Self::MergeTree),
+            "ReplacingMergeTree" => Ok(Self::ReplacingMergeTree),
             _ => Err(Error::InvalidEngineName),
         }
     }
@@ -37,6 +46,7 @@ impl EngineName {
     pub fn get_engine(&self, config: EngineConfig) -> Box<dyn Engine> {
         match self {
             EngineName::MergeTree => Box::new(MergeTreeEngine::new(config)),
+            EngineName::ReplacingMergeTree => Box::new(ReplacingMergeTreeEngine::new(config)),
         }
     }
 }

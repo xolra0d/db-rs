@@ -156,7 +156,11 @@ impl TablePart {
             .settings
             .engine
             .get_engine(EngineConfig::default());
-        let data = engine.order_columns(columns, &table_config.metadata.schema.order_by)?;
+        let data = engine.order_columns(
+            columns,
+            &table_config.metadata.schema.order_by,
+            &table_config.metadata.schema.primary_key,
+        )?;
 
         let marks = generate_indexes(
             &data,

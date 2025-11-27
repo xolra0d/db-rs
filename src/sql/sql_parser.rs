@@ -220,7 +220,7 @@ impl From<LogicalPlan> for PhysicalPlan {
                                 offset,
                             };
                         }
-                        unexpected => panic!("Unexpected plan node in query: {:?}", unexpected),
+                        unexpected => unreachable!("Unexpected plan node in query: {unexpected:?}"),
                     }
                 }
             }
