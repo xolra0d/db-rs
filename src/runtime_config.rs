@@ -17,7 +17,13 @@ pub static DATABASE_LOAD: std::sync::LazyLock<AtomicU32> =
     std::sync::LazyLock::new(AtomicU32::default);
 
 pub struct ComplexityGuard {
-    pub complexity: u32,
+    complexity: u32,
+}
+
+impl ComplexityGuard {
+    pub fn new(complexity: u32) -> Self {
+        Self { complexity }
+    }
 }
 
 impl Drop for ComplexityGuard {

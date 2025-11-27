@@ -68,6 +68,9 @@ impl Config {
         self.max_connections
     }
 
+    /// Provides the background merge availability threshold.
+    ///
+    /// The threshold value used to determine when background merges are allowed.
     pub const fn get_background_merge_available_under(&self) -> u32 {
         self.background_merge_available_under
     }

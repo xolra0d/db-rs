@@ -18,7 +18,7 @@ impl CommandRunner {
 
         let complexity = physical_plan.get_complexity();
         DATABASE_LOAD.fetch_add(complexity, std::sync::atomic::Ordering::Relaxed);
-        let _guard = ComplexityGuard { complexity };
+        let _guard = ComplexityGuard::new(complexity);
 
         Self::execute_physical_plan(physical_plan)
     }
