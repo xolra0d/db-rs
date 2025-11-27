@@ -175,7 +175,11 @@ impl CommandRunner {
                 .engine
                 .get_engine(EngineConfig::default());
             for sort_by_ in *sort_by {
-                result = engine.order_columns(result, sort_by_)?;
+                result = engine.order_columns(
+                    result,
+                    sort_by_,
+                    &table_config.metadata.schema.primary_key,
+                )?;
             }
         }
 

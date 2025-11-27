@@ -2,6 +2,8 @@ use crate::engines::{Engine, EngineConfig};
 use crate::error::{Error, Result};
 use crate::storage::{Column, ColumnDef};
 
+use std::cmp::Ordering;
+
 #[allow(dead_code)]
 pub struct MergeTreeEngine {
     config: EngineConfig,
@@ -18,6 +20,7 @@ impl Engine for MergeTreeEngine {
         &self,
         mut columns: Vec<Column>,
         order_by: &[ColumnDef],
+        _primary_key: &[ColumnDef],
     ) -> Result<Vec<Column>> {
         if order_by.is_empty() || columns.is_empty() {
             return Err(Error::NoColumnsSpecified);
@@ -51,11 +54,11 @@ impl Engine for MergeTreeEngine {
                     .partial_cmp(col_b)
                     .expect("Values in the same column are of the same type and ARE comparable");
 
-                if cmp != std::cmp::Ordering::Equal {
+                if cmp != Ordering::Equal {
                     return cmp;
                 }
             }
-            std::cmp::Ordering::Equal
+            Ordering::Equal
         });
 
         for column in &mut columns {
