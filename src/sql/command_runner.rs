@@ -1,4 +1,5 @@
 use crate::error::Result;
+use crate::runtime_config::{ComplexityGuard, DATABASE_LOAD};
 use crate::sql::sql_parser::{LogicalPlan, PhysicalPlan};
 use crate::storage::OutputTable;
 
@@ -14,6 +15,10 @@ impl CommandRunner {
         let logical_plan = logical_plan.optimize();
 
         let physical_plan = PhysicalPlan::from(logical_plan);
+
+        let complexity = physical_plan.get_complexity();
+        DATABASE_LOAD.fetch_add(complexity, std::sync::atomic::Ordering::Relaxed);
+        let _guard = ComplexityGuard { complexity };
 
         Self::execute_physical_plan(physical_plan)
     }

@@ -1,7 +1,8 @@
 use crate::error::Result;
-use crate::runtime_config::TABLE_DATA;
+use crate::runtime_config::{DATABASE_LOAD, TABLE_DATA};
 use crate::storage::{Column, TableDef, TablePart, TablePartInfo};
 
+use crate::config::CONFIG;
 use log::{error, info, warn};
 use uuid::Uuid;
 
@@ -9,9 +10,16 @@ pub struct BackgroundMerge;
 
 impl BackgroundMerge {
     pub fn start() {
-        // todo: add check for resources availability (selects/sec)
         info!("Background merges started");
         loop {
+            if DATABASE_LOAD.load(std::sync::atomic::Ordering::Relaxed)
+                >= CONFIG.get_background_merge_available_under()
+            {
+                // too busy to allocate resources for background merges
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                continue;
+            }
+
             let Some(merge_data) = find_two_parts() else {
                 std::thread::sleep(std::time::Duration::from_secs(1));
                 continue;
