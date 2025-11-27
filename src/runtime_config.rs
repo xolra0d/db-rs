@@ -21,6 +21,24 @@ pub struct ComplexityGuard {
 }
 
 impl Drop for ComplexityGuard {
+    /// Decrements the global `DATABASE_LOAD` counter by this guard's `complexity` when the guard is dropped.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::sync::atomic::Ordering;
+    ///
+    /// // initialize global counter
+    /// DATABASE_LOAD.store(10, Ordering::Relaxed);
+    ///
+    /// {
+    ///     let _guard = ComplexityGuard { complexity: 4 };
+    ///     // `_guard` remains in scope; counter still 10
+    ///     assert_eq!(DATABASE_LOAD.load(Ordering::Relaxed), 10);
+    /// } // `_guard` is dropped here, subtracting 4 from DATABASE_LOAD
+    ///
+    /// assert_eq!(DATABASE_LOAD.load(Ordering::Relaxed), 6);
+    /// ```
     fn drop(&mut self) {
         DATABASE_LOAD.fetch_sub(self.complexity, std::sync::atomic::Ordering::Relaxed);
     }

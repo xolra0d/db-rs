@@ -8,7 +8,28 @@ use crate::storage::OutputTable;
 pub struct CommandRunner;
 
 impl CommandRunner {
-    /// Handles full command execution.
+    /// Execute a textual command end-to-end and produce its resulting output table.
+    ///
+    /// This function parses `command` into a logical plan, optimizes it, lowers it to a physical
+    /// plan, accounts for the plan's complexity (incrementing the global `DATABASE_LOAD` and
+    /// creating a scoped `ComplexityGuard`), and then executes the resulting physical plan.
+    /// Errors from parsing, planning, or execution are propagated.
+    ///
+    /// # Parameters
+    ///
+    /// - `command`: A SQL-like command string to be executed.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(OutputTable)` with the execution result on success, `Err(_)` if parsing, planning, or
+    /// execution fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// // Execute a no-op or simple command and assert it completes.
+    /// let _ = CommandRunner::execute_command("SKIP").unwrap();
+    /// ```
     pub fn execute_command(command: &str) -> Result<OutputTable> {
         let logical_plan = LogicalPlan::try_from(command)?;
 

@@ -164,6 +164,29 @@ pub enum PhysicalPlan {
 }
 
 impl From<LogicalPlan> for PhysicalPlan {
+    /// Converts a `LogicalPlan` into a corresponding `PhysicalPlan`.
+    ///
+    /// The conversion maps each high-level plan node to an executable plan variant.
+    /// For nested query shapes (projections, filters, order-by, limit) the method
+    /// accumulates projection columns, combines multiple filter expressions with
+    /// logical `AND`, records ordering and pagination, and produces a single
+    /// `PhysicalPlan::Select` referring to the underlying scan source.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use crate::sql::sql_parser::{LogicalPlan, PhysicalPlan};
+    ///
+    /// // simple direct mapping
+    /// let lp = LogicalPlan::Skip;
+    /// let pp = PhysicalPlan::from(lp);
+    /// assert!(matches!(pp, PhysicalPlan::Skip));
+    ///
+    /// // scan becomes a select with defaults
+    /// let scan = LogicalPlan::Scan { source: /* some ScanSource */ todo!() };
+    /// // let select = PhysicalPlan::from(scan);
+    /// // assert!(matches!(select, PhysicalPlan::Select { .. }));
+    /// ```
     fn from(plan: LogicalPlan) -> Self {
         match plan {
             LogicalPlan::Skip => Self::Skip,
@@ -261,6 +284,31 @@ impl From<LogicalPlan> for PhysicalPlan {
 }
 
 impl PhysicalPlan {
+    /// Computes a numeric complexity score for the physical plan variant.
+    ///
+    /// The score is a small integer used to estimate relative execution cost for planning or optimization.
+    ///
+    /// # Returns
+    ///
+    /// A `u32` complexity score:
+    /// - `0` for `Skip`
+    /// - `1` for `CreateDatabase`, `CreateTable`, `DropDatabase`, and `DropTable`
+    /// - `2` for `Insert`
+    /// - `4` for `Select`
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let p = crate::sql::PhysicalPlan::Select {
+    ///     scan_source: crate::sql::ScanSource::Table(Default::default()),
+    ///     columns: vec![],
+    ///     filter: None,
+    ///     sort_by: None,
+    ///     limit: None,
+    ///     offset: 0
+    /// };
+    /// assert_eq!(p.get_complexity(), 4);
+    /// ```
     pub fn get_complexity(&self) -> u32 {
         match self {
             PhysicalPlan::Skip => 0,

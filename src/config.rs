@@ -63,11 +63,38 @@ impl Config {
         }
     }
 
-    /// Get max connections from configuration
+    /// Get the configured maximum number of concurrent connections.
+    ///
+    /// # Returns
+    ///
+    /// The maximum number of concurrent connections configured.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let cfg = Config {
+    ///     tcp_socket: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(127, 0, 0, 1), 8080),
+    ///     storage_directory: std::path::PathBuf::from("/tmp"),
+    ///     log_level: 1,
+    ///     max_connections: 100,
+    ///     background_merge_available_under: 30,
+    /// };
+    /// assert_eq!(cfg.get_max_connections(), 100);
+    /// ```
     pub const fn get_max_connections(&self) -> usize {
         self.max_connections
     }
 
+    /// Provides the background merge availability threshold.
+    ///
+    /// The threshold value used to determine when background merges are allowed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let n = crate::CONFIG.get_background_merge_available_under();
+    /// println!("background merge threshold: {}", n);
+    /// ```
     pub const fn get_background_merge_available_under(&self) -> u32 {
         self.background_merge_available_under
     }

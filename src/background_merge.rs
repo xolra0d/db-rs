@@ -9,6 +9,18 @@ use uuid::Uuid;
 pub struct BackgroundMerge;
 
 impl BackgroundMerge {
+    /// Continuously runs the background merging loop that finds, builds, persists, and atomically replaces table parts when resources permit.
+    ///
+    /// The loop monitors system load and defers merging while resources are constrained; when allowed, it locates two parts for a table, loads and merges their columns into a new part, saves the merged part, and performs an atomic switch that replaces the originals with the merged part.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// // Run the background merge loop on a dedicated thread.
+    /// std::thread::spawn(|| {
+    ///     BackgroundMerge::start();
+    /// });
+    /// ```
     pub fn start() {
         info!("Background merges started");
         loop {
