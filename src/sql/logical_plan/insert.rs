@@ -3,7 +3,7 @@ use sqlparser::ast::{Expr, Insert, SetExpr, TableObject, UnaryOperator, Value as
 use crate::error::{Error, Result};
 use crate::runtime_config::TABLE_DATA;
 use crate::sql::sql_parser::LogicalPlan;
-use crate::storage::{Column, ColumnDefOption, TableDef, Value};
+use crate::storage::{Column, TableDef, Value};
 
 impl LogicalPlan {
     /// Parses INSERT statement into `LogicalPlan::Insert` variant.
@@ -55,24 +55,35 @@ impl LogicalPlan {
             insert_column_set.insert(&column_def.name);
         }
 
-        let missing_not_null = table_config
+        let missing_not_null_not_default = table_config
             .metadata
             .schema
             .columns
             .iter()
             .filter(|col| !insert_column_set.contains(&col.name))
-            .any(|col| {
-                col.constraints
-                    .iter()
-                    .any(|c| c.option == ColumnDefOption::NotNull)
-            });
+            .find(|col| !col.constraints.nullable && col.constraints.default.is_none());
 
-        if missing_not_null {
-            return Err(Error::InvalidColumnsSpecified);
+        if let Some(col_def) = missing_not_null_not_default {
+            return Err(Error::InvalidSource(format!(
+                "Column ({}) is not specified and is neither nullable nor have a default value.",
+                col_def.name
+            )));
         }
 
-        for order_col in &table_config.metadata.schema.order_by {
-            if !insert_column_set.contains(&order_col.name) {
+        for order_by_col in &table_config.metadata.schema.order_by {
+            if !insert_column_set.contains(&order_by_col.name)
+                && !order_by_col.constraints.nullable
+                && order_by_col.constraints.default.is_none()
+            {
+                return Err(Error::InvalidColumnsSpecified);
+            }
+        }
+
+        for pk_col in &table_config.metadata.schema.primary_key {
+            if !insert_column_set.contains(&pk_col.name)
+                && !pk_col.constraints.nullable
+                && pk_col.constraints.default.is_none()
+            {
                 return Err(Error::InvalidColumnsSpecified);
             }
         }
@@ -85,25 +96,29 @@ impl LogicalPlan {
             })
             .collect();
 
-        let Some(ref source) = insert.source else {
-            return Err(Error::InvalidSource);
+        let Some(source) = &insert.source else {
+            return Err(Error::InvalidSource(
+                "No source of values was specified.".to_string(),
+            ));
         };
-        let SetExpr::Values(ref source) = *source.body else {
-            return Err(Error::InvalidSource);
+        let SetExpr::Values(source) = source.body.as_ref() else {
+            return Err(Error::InvalidSource("Provide direct values".to_string())); // todo: allow source to be from select
         };
 
-        if source.rows.is_empty() {
+        let Some(val_count) = source.rows.first().map(Vec::len) else {
             return Err(Error::EmptySource);
+        };
+
+        if source.rows.iter().any(|x| x.len() != val_count) {
+            return Err(Error::InvalidSource("Columns length mismatch.".to_string()));
         }
 
-        let len_first = source.rows[0].len();
-
-        if source.rows.iter().any(|x| x.len() != len_first) {
-            return Err(Error::InvalidSource);
-        }
-
-        if len_first != columns.len() {
-            return Err(Error::InvalidSource);
+        if columns.len() != val_count {
+            return Err(Error::InvalidSource(format!(
+                "Invalid number of values specified. Expected: {}, got: {}",
+                columns.len(),
+                val_count
+            )));
         }
 
         for row in &source.rows {
@@ -112,7 +127,9 @@ impl LogicalPlan {
                     Expr::Value(sql_value) => sql_value.value.clone(),
                     Expr::UnaryOp { op, expr } => {
                         let Expr::Value(inner) = expr.as_ref() else {
-                            return Err(Error::InvalidSource);
+                            return Err(Error::InvalidSource(format!(
+                                "Expected direct value, received: {expr}"
+                            )));
                         };
                         match (&op, &inner.value) {
                             (UnaryOperator::Minus, SQLValue::Number(n, exact)) => {
@@ -121,31 +138,52 @@ impl LogicalPlan {
                             (UnaryOperator::Plus, SQLValue::Number(n, exact)) => {
                                 SQLValue::Number(n.clone(), *exact)
                             }
-                            _ => return Err(Error::InvalidSource),
+                            _ => {
+                                return Err(Error::InvalidSource(format!(
+                                    "Expected plus or minus as operator and a number, received: {} and {}",
+                                    op, inner.value
+                                )));
+                            }
                         }
                     }
-                    _ => return Err(Error::InvalidSource),
+                    _ => {
+                        return Err(Error::InvalidSource(format!(
+                            "Expected a value, received: {expr}"
+                        )));
+                    }
                 };
 
                 let column_type = &columns[col_idx].column_def.field_type;
                 let value = Value::try_from((sql_value, column_type))?;
 
-                if value == Value::Null {
-                    let has_not_null = columns[col_idx]
-                        .column_def
-                        .constraints
-                        .iter()
-                        .any(|c| c.option == ColumnDefOption::NotNull);
-                    if has_not_null {
-                        return Err(Error::CouldNotInsertData(format!(
-                            "NULL value not allowed for column '{}'",
-                            columns[col_idx].column_def.name
-                        )));
-                    }
+                if value == Value::Null && !columns[col_idx].column_def.constraints.nullable {
+                    return Err(Error::CouldNotInsertData(format!(
+                        "NULL value not allowed for column '{}'",
+                        columns[col_idx].column_def.name
+                    )));
                 }
 
                 columns[col_idx].data.push(value);
             }
+        }
+
+        for column_def in &table_config.metadata.schema.columns {
+            if insert_column_set.contains(&column_def.name) {
+                continue;
+            }
+            let default_value_ref = {
+                if let Some(default_value) = column_def.constraints.default.as_ref() {
+                    default_value
+                } else if column_def.constraints.nullable {
+                    &Value::Null
+                } else {
+                    continue;
+                }
+            };
+            columns.push(Column {
+                column_def: column_def.clone(),
+                data: vec![default_value_ref.clone(); source.rows.len()],
+            });
         }
 
         Ok(LogicalPlan::Insert { table_def, columns })

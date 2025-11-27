@@ -245,7 +245,7 @@ fn combine_filters(mut filters: Vec<Expr>) -> Expr {
 mod tests {
     use crate::sql::plan_optimization::query_flattening::combine_filters;
     use crate::sql::sql_parser::{LogicalPlan, ScanSource};
-    use crate::storage::{ColumnDef, CompressionType, TableDef, ValueType};
+    use crate::storage::{ColumnDef, Constraints, TableDef, ValueType};
 
     use sqlparser::ast::{Expr, Ident};
     use sqlparser::tokenizer::Span;
@@ -254,8 +254,7 @@ mod tests {
         ColumnDef {
             name,
             field_type: ValueType::String,
-            constraints: Vec::new(),
-            compression_type: CompressionType::None,
+            constraints: Constraints::default(),
         }
     }
 

@@ -1,7 +1,19 @@
+use crate::error::{Error, Result};
+use crate::storage::ValueType;
+use serde::{Deserialize, Serialize};
 use std::io::{Read as _, Write as _};
 
-use crate::error::{Error, Result};
-use crate::storage::{CompressionType, ValueType};
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub enum CompressionType {
+    None,
+    LZ4(u8),
+}
+
+impl Default for CompressionType {
+    fn default() -> Self {
+        Self::LZ4(3)
+    }
+}
 
 impl ValueType {
     pub fn get_optimal_compression(&self) -> CompressionType {

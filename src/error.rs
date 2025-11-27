@@ -45,8 +45,8 @@ pub enum Error {
     NoColumnsSpecified,
     #[display("Invalid columns specified.")]
     InvalidColumnsSpecified,
-    #[display("Invalid source of values.")]
-    InvalidSource,
+    #[display("Invalid source of values: {_0}")]
+    InvalidSource(String),
     #[display("Unsupported column constraint: {_0}")]
     UnsupportedColumnConstraint(String),
     #[display("Could not insert data: {_0}.")]

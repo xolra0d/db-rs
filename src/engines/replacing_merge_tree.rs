@@ -84,15 +84,14 @@ impl Engine for ReplacingMergeTreeEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::{Column, ColumnDef, CompressionType, Value, ValueType};
+    use crate::storage::{Column, ColumnDef, Constraints, Value, ValueType};
 
     fn string_column(name: String, data: Vec<&str>) -> Column {
         Column {
             column_def: ColumnDef {
                 name,
                 field_type: ValueType::String,
-                compression_type: CompressionType::None,
-                constraints: Vec::new(),
+                constraints: Constraints::default(),
             },
             data: data.iter().map(|x| Value::String(x.to_string())).collect(),
         }

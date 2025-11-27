@@ -15,31 +15,30 @@ use crate::storage::table_metadata::TABLE_METADATA_FILENAME;
 pub use crate::storage::table_metadata::{TableMetadata, TableSchema, TableSettings};
 pub use crate::storage::table_part::{Mark, TablePart, TablePartInfo, load_all_parts_on_startup};
 pub use crate::storage::value::{Value, ValueType};
+pub use crate::storage::compression::CompressionType;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub enum ColumnDefOption {
-    Null,
-    NotNull,
+pub struct Constraints {
+    pub nullable: bool,
+    pub default: Option<Value>,
+    pub compression_type: CompressionType,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct ColumnDefConstraint {
-    pub name: Option<String>,
-    pub option: ColumnDefOption,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub enum CompressionType {
-    None,
-    LZ4(u8),
+impl Default for Constraints {
+    fn default() -> Self {
+        Self {
+            nullable: true,
+            default: None,
+            compression_type: CompressionType::default(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ColumnDef {
     pub name: String,
     pub field_type: ValueType,
-    pub constraints: Vec<ColumnDefConstraint>,
-    pub compression_type: CompressionType,
+    pub constraints: Constraints,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -77,8 +76,7 @@ impl OutputTable {
                 column_def: ColumnDef {
                     name: "OK".to_string(),
                     field_type: ValueType::String,
-                    constraints: Vec::new(),
-                    compression_type: CompressionType::None,
+                    constraints: Constraints::default(),
                 },
                 data: vec![Value::String("OK".to_string())],
             }],
