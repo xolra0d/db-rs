@@ -1,5 +1,6 @@
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
+use std::io::{Read as _, Seek as _};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
@@ -65,44 +66,46 @@ impl TablePartInfo {
     ) -> Result<Column> {
         let column_path = self.get_column_path(table_def, column_def);
 
-        let file_bytes = std::fs::read(&column_path)
-            .map_err(|e| Error::CouldNotReadData(format!("Failed to read column file: {e}")))?;
-
-        if file_bytes.len() <= MAGIC_BYTES_COLUMN.len() + 4 {
-            return Err(Error::CouldNotReadData("Column file too small".to_string()));
-        }
-
-        let file_magic_bytes = &file_bytes[0..MAGIC_BYTES_COLUMN.len()];
-        if file_magic_bytes != MAGIC_BYTES_COLUMN {
-            return Err(Error::CouldNotReadData(
-                "Invalid magic bytes in column file".to_string(),
-            ));
-        }
-
-        // Verify CRC
-        let data_bytes = &file_bytes[MAGIC_BYTES_COLUMN.len()..(file_bytes.len() - 4)];
-        let expected_crc = u32::from_le_bytes([
-            file_bytes[file_bytes.len() - 4],
-            file_bytes[file_bytes.len() - 3],
-            file_bytes[file_bytes.len() - 2],
-            file_bytes[file_bytes.len() - 1],
-        ]);
-        let actual_crc = crc32fast::hash(data_bytes);
-        if expected_crc != actual_crc {
-            return Err(Error::CouldNotReadData(
-                "CRC mismatch in column file".to_string(),
-            ));
-        }
-
         let mut all_values = Vec::new();
 
+        let mut file = std::fs::File::open(&column_path)
+            .map_err(|e| Error::CouldNotReadData(format!("Failed to read column file: {e}")))?;
+
+        let len_bytes = file.metadata().map(|x| x.len()).map_err(|error| {
+            Error::CouldNotReadData(format!(
+                "Could not read column ({}) metadata: {error}.",
+                column_def.name
+            ))
+        })?;
+
+        if let Some(mark_info) = mark_infos
+            .iter()
+            .find(|mark_info| mark_info.start > len_bytes || mark_info.end > len_bytes)
+        {
+            return Err(Error::CouldNotReadData(format!(
+                "Mark ({mark_info:?}) out of bounds. File has only {len_bytes} bytes."
+            )));
+        }
+
         for mark_info in mark_infos {
-            let start = (mark_info.start as usize) - MAGIC_BYTES_COLUMN.len();
-            let end = (mark_info.end as usize) - MAGIC_BYTES_COLUMN.len();
-            let granule_compressed_bytes = &data_bytes[start..end];
+            file.seek(std::io::SeekFrom::Start(mark_info.start))
+                .map_err(|error| {
+                    Error::CouldNotReadData(format!(
+                        "Seek in mark {mark_info:?} in column ({}) failed: {error}",
+                        column_def.name
+                    ))
+                })?;
+            let mut granule_compressed_bytes = vec![0; (mark_info.end - mark_info.start) as usize];
+            file.read_exact(&mut granule_compressed_bytes)
+                .map_err(|error| {
+                    Error::CouldNotReadData(format!(
+                        "load error for column ({}) and mark ({mark_info:?}): {error}",
+                        column_def.name
+                    ))
+                })?;
 
             let granule_bytes = decompress_bytes(
-                granule_compressed_bytes,
+                &granule_compressed_bytes,
                 &column_def.field_type.get_optimal_compression(),
             )?;
 

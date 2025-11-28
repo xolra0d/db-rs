@@ -106,7 +106,6 @@ impl CommandRunner {
                 }
                 marks_all
             };
-
             for col in &mut result {
                 if let Some(storage_idx) = part_info
                     .column_defs
@@ -122,7 +121,6 @@ impl CommandRunner {
                 }
             }
         }
-
         if let Some(filter) = filter {
             let row_count = result.first().map_or(0, |col| col.data.len());
 
