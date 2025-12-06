@@ -3,17 +3,45 @@ use crate::error::{Error, Result};
 use crate::storage::{Column, ColumnDef};
 use std::cmp::Ordering;
 
+/// Engine for editing rows. Sorts values in ASC order.
+///
+/// When it finds rows with the same PK values, it replaces with the newest row values.
+///
+/// # Example
+///
+/// ```text
+/// PK indexes: [0, 1]
+///
+/// Row0: [1, 2, 3, 4] <- same PK values (1, 2)
+/// Row1: [4, 2, 3, 4]
+/// Row2: [1, 2, 33, 42] <- same PK values (1, 2)
+///
+/// Replaces row [1, 2, 3, 4] with new row: [1, 2, 33, 42]
+///
+/// Returns:
+/// Row0: [1, 2, 33, 42]
+/// Row1: [4, 2, 3, 4]
+/// ```
 pub struct ReplacingMergeTreeEngine {
     _config: EngineConfig,
 }
 
 impl ReplacingMergeTreeEngine {
+    /// Creates a new `ReplacingMergeTree` engine with the given configuration.
     pub fn new(config: EngineConfig) -> Self {
         Self { _config: config }
     }
 }
 
 impl Engine for ReplacingMergeTreeEngine {
+    /// Orders columns and deduplicates rows by PRIMARY KEY, keeping the latest row.
+    ///
+    /// Sorts rows in ascending order by ORDER BY columns, then removes duplicates
+    /// based on PRIMARY KEY, keeping the row that appears last (newest).
+    ///
+    /// Returns:
+    ///   * Ok: `Vec<Column>` with sorted and deduplicated rows.
+    ///   * Error: `NoColumnsSpecified` if columns is empty.
     fn order_columns(
         &self,
         mut columns: Vec<Column>,

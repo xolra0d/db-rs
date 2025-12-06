@@ -3,21 +3,25 @@ pub mod table_metadata;
 mod table_part;
 pub mod value;
 
-use serde::{Deserialize, Serialize};
-use sqlparser::ast::{ObjectName, ObjectNamePart};
-use std::fmt;
-use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
-
 use crate::CONFIG;
 use crate::error::{Error, Result};
 pub use crate::storage::compression::CompressionType;
 use crate::storage::table_metadata::TABLE_METADATA_FILENAME;
 pub use crate::storage::table_metadata::{TableMetadata, TableSchema, TableSettings};
+use crate::storage::table_part::MAGIC_BYTES_COLUMN;
 pub use crate::storage::table_part::{Mark, TablePart, TablePartInfo, load_all_parts_on_startup};
 pub use crate::storage::value::{Value, ValueType};
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+use memmap2::{Advice, Mmap};
+use rkyv::{Archive as RkyvArchive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
+use serde::Serialize;
+use sqlparser::ast::{ObjectName, ObjectNamePart};
+use std::fmt;
+use std::fs::File;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
+
+#[derive(Debug, Clone, PartialEq, Serialize, RkyvSerialize, RkyvArchive, RkyvDeserialize)]
 pub struct Constraints {
     pub nullable: bool,
     pub default: Option<Value>,
@@ -34,17 +38,110 @@ impl Default for Constraints {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, PartialEq, Clone, RkyvSerialize, RkyvArchive, RkyvDeserialize, Serialize)]
 pub struct ColumnDef {
     pub name: String,
     pub field_type: ValueType,
     pub constraints: Constraints,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Column {
     pub column_def: ColumnDef,
     pub data: Vec<Value>,
+}
+
+/// Tiny wrapper for implementing `std::io::Write` for `crc32fast::Hasher`.
+///
+/// Gives 20% speedup.
+struct Crc32Writer(crc32fast::Hasher);
+
+impl Crc32Writer {
+    fn finalize(self) -> u32 {
+        self.0.finalize()
+    }
+}
+
+impl std::io::Write for Crc32Writer {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.update(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Column {
+    pub fn open_as_mmap(file_path: &Path) -> Result<Mmap> {
+        let file = File::open(file_path).map_err(|error| {
+            Error::CouldNotReadData(format!(
+                "Could not open column file ({}): {error}",
+                file_path.display()
+            ))
+        })?;
+
+        let mmap = unsafe {
+            Mmap::map(&file).map_err(|error| {
+                Error::CouldNotReadData(format!(
+                    "Could not open mmap for column file ({}): {error}",
+                    file_path.display()
+                ))
+            })?
+        };
+
+        // todo: consider advice as optional
+        mmap.advise(Advice::Sequential).map_err(|error| {
+            Error::CouldNotReadData(format!(
+                "Could not advice mmap for column file ({}): {error}",
+                file_path.display()
+            ))
+        })?;
+
+        Ok(mmap)
+    }
+
+    pub fn validate_mmap(mmap: &Mmap, col_name: &str) -> Result<()> {
+        if mmap.len() <= MAGIC_BYTES_COLUMN.len() + 4 {
+            return Err(Error::CouldNotReadData(format!(
+                "Column file ({col_name}) too small"
+            )));
+        }
+
+        let file_magic_bytes = &mmap[0..MAGIC_BYTES_COLUMN.len()];
+        if file_magic_bytes != MAGIC_BYTES_COLUMN {
+            return Err(Error::CouldNotReadData(format!(
+                "Invalid magic bytes in column file ({col_name})"
+            )));
+        }
+
+        let mut result = Crc32Writer(crc32fast::Hasher::new());
+        std::io::copy(
+            &mut std::io::Cursor::new(&mmap[MAGIC_BYTES_COLUMN.len()..(mmap.len() - 4)]),
+            &mut result,
+        )
+        .map_err(|error| {
+            Error::CouldNotReadData(format!(
+                "Could not read mmap of column ({col_name}): {error}"
+            ))
+        })?;
+        let actual_crc = result.finalize();
+        let expected_crc = u32::from_le_bytes([
+            mmap[mmap.len() - 4],
+            mmap[mmap.len() - 3],
+            mmap[mmap.len() - 2],
+            mmap[mmap.len() - 1],
+        ]);
+
+        if expected_crc != actual_crc {
+            return Err(Error::CouldNotReadData(format!(
+                "CRC mismatch in column file ({col_name})"
+            )));
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -164,69 +261,4 @@ pub fn get_unix_time() -> Result<u64> {
             .as_millis(),
     )
     .map_err(|_| Error::SystemTimeWentBackword)
-}
-
-/// Reads a specific file with crc32.
-///
-/// Returns: T or `CouldNotReadData` on failure
-pub fn read_file_with_crc<T>(path: &Path, magic_bytes: &[u8]) -> Result<T>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    let file_bytes = std::fs::read(path)
-        .map_err(|e| Error::CouldNotReadData(format!("Failed to read column file: {e}")))?;
-
-    if file_bytes.len() <= magic_bytes.len() + 4 {
-        return Err(Error::CouldNotReadData("Column file too small".to_string()));
-    }
-
-    let file_magic_bytes = &file_bytes[0..magic_bytes.len()];
-    if file_magic_bytes != magic_bytes {
-        return Err(Error::CouldNotReadData(
-            "Invalid magic bytes in column file".to_string(),
-        ));
-    }
-
-    let data_bytes = &file_bytes[magic_bytes.len()..(file_bytes.len() - 4)];
-
-    let expected_crc = u32::from_le_bytes([
-        file_bytes[file_bytes.len() - 4],
-        file_bytes[file_bytes.len() - 3],
-        file_bytes[file_bytes.len() - 2],
-        file_bytes[file_bytes.len() - 1],
-    ]);
-
-    let actual_crc = crc32fast::hash(data_bytes);
-    if expected_crc != actual_crc {
-        return Err(Error::CouldNotReadData(
-            "CRC mismatch in column file".to_string(),
-        ));
-    }
-
-    let file = bincode::serde::decode_from_slice(data_bytes, bincode::config::standard())
-        .map(|x| x.0)
-        .map_err(|e| Error::CouldNotReadData(format!("Failed to deserialize column: {e}")))?;
-
-    Ok(file)
-}
-
-/// Writes to a specific file with crc32.
-///
-/// Returns: () or `CouldNotInsertData` on failure
-pub fn write_file_with_crc<T>(data: &T, path: &PathBuf, magic_bytes: &[u8]) -> Result<()>
-where
-    T: Serialize,
-{
-    let mut bytes = Vec::from(magic_bytes);
-
-    let data_bytes = bincode::serde::encode_to_vec(data, bincode::config::standard())
-        .map_err(|e| Error::CouldNotInsertData(format!("Failed to serialize column: {e}")))?;
-
-    let crc = crc32fast::hash(&data_bytes);
-
-    bytes.extend(data_bytes);
-    bytes.extend(crc.to_le_bytes());
-
-    std::fs::write(path, bytes)
-        .map_err(|e| Error::CouldNotInsertData(format!("Failed to write file: {e}")))
 }

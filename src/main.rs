@@ -95,8 +95,8 @@ async fn handle_connection(socket: &mut TcpStream) -> Result<(), Error> {
             result.map(|output_table| output_table.with_execution_time(elapsed))
         })
         .await
-        .unwrap_or_else(|e| {
-            error!("SQL task panicked: {e}");
+        .unwrap_or_else(|error| {
+            error!("SQL task panicked: {error}");
             Err(Error::Internal(
                 "Internal error during query execution".to_string(),
             ))

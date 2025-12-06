@@ -3,4 +3,6 @@ target/
 clients/.venv/
 db_files/
 perf.data*
+perf.svg
+flamegraph.svg
 todos

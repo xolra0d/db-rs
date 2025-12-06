@@ -8,7 +8,13 @@ use crate::storage::OutputTable;
 pub struct CommandRunner;
 
 impl CommandRunner {
-    /// Handles full command execution.
+    /// Handles full command execution pipeline.
+    ///
+    /// Parses SQL, optimizes logical plan, converts to physical plan, and executes.
+    ///
+    /// Returns:
+    ///   * Ok: `OutputTable` with query results or success status.
+    ///   * Error: Any error from parsing, optimization, or execution stages.
     pub fn execute_command(command: &str) -> Result<OutputTable> {
         let logical_plan = LogicalPlan::try_from(command)?;
 
@@ -23,18 +29,22 @@ impl CommandRunner {
         Self::execute_physical_plan(physical_plan)
     }
 
-    /// Execution of the physical plan.
+    /// Executes a physical plan by dispatching to appropriate handler.
+    ///
+    /// Returns:
+    ///   * Ok: `OutputTable` with query results or success status.
+    ///   * Error: Handler-specific errors (e.g., `TableNotFound`, `CouldNotInsertData`).
     pub fn execute_physical_plan(plan: PhysicalPlan) -> Result<OutputTable> {
         match plan {
             PhysicalPlan::Skip => Ok(OutputTable::build_ok()),
             PhysicalPlan::CreateDatabase { name } => Self::create_database(name),
             PhysicalPlan::CreateTable {
-                name,
+                name: table_def,
                 columns,
                 settings,
                 order_by,
                 primary_key,
-            } => Self::create_table(name, columns, settings, order_by, primary_key),
+            } => Self::create_table(&table_def, columns, settings, order_by, primary_key),
             PhysicalPlan::Insert { table_def, columns } => Self::insert(&table_def, columns),
             PhysicalPlan::DropDatabase { name, if_exists } => Self::drop_database(&name, if_exists),
             PhysicalPlan::DropTable { name, if_exists } => Self::drop_table(&name, if_exists),
@@ -47,7 +57,7 @@ impl CommandRunner {
                 offset,
             } => Self::select(
                 scan_source,
-                &columns,
+                columns,
                 filter,
                 sort_by.as_ref(),
                 limit,

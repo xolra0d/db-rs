@@ -1,16 +1,48 @@
-use crate::engines::EngineConfig;
+use crate::engines::{EngineConfig, EngineName};
 use crate::error::{Error, Result};
 use crate::runtime_config::TABLE_DATA;
+use crate::sql::CommandRunner;
+use crate::sql::compiled_filter::{BinOp, CompiledFilter};
 use crate::sql::sql_parser::ScanSource;
-use crate::sql::{CommandRunner, parse_ident};
-use crate::storage::{Column, ColumnDef, Mark, OutputTable, Value};
+use crate::storage::value::ArchivedValue;
+use crate::storage::{Column, ColumnDef, Mark, OutputTable, TableDef, TablePartInfo, Value};
+use std::cell::RefCell;
 
-use sqlparser::ast::{BinaryOperator as BinOp, Expr, UnaryOperator, Value as SQLValue};
+use rayon::prelude::*;
+use rkyv::vec::ArchivedVec;
+use sqlparser::ast::Expr;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
+
+thread_local! {
+    static LOCAL_BUFFER: RefCell<Vec<Vec<Value>>> = const { RefCell::new(Vec::new()) };
+}
+
+struct ScanConfig {
+    result: Arc<RwLock<Vec<Column>>>,
+    infos: Vec<TablePartInfo>,
+    use_filter_optimization: bool,
+    compiled_filter: Option<CompiledFilter>,
+    table_col_defs: Vec<ColumnDef>,
+    pk_col_defs: Vec<ColumnDef>,
+    result_col_defs: Vec<ColumnDef>,
+    index_granularity: usize,
+    table_def: TableDef,
+    limit: Option<u64>,
+    offset: u64,
+}
 
 impl CommandRunner {
+    /// Executes SELECT operation by scanning all table parts.
+    ///
+    /// Reads all table parts, optionally filters and orders data.
+    ///
+    /// Returns:
+    ///   * Ok: `OutputTable` with success status
+    ///   * Error: `TableNotFound`, `CouldNotReadData` or `Internal` on failure
     pub fn select(
         table_def: ScanSource,
-        columns_to_read: &[ColumnDef],
+        columns_to_read: Vec<ColumnDef>,
         filter: Option<Box<Expr>>,
         order_by: Option<&Vec<Vec<ColumnDef>>>,
         limit: Option<u64>,
@@ -25,159 +57,441 @@ impl CommandRunner {
                 ));
             }
         };
-
         let Some(table_config) = TABLE_DATA.get(&table_def) else {
             return Err(Error::TableNotFound);
         };
+        let index_granularity = table_config.metadata.settings.index_granularity as usize;
 
-        let mut result = Vec::with_capacity(columns_to_read.len());
+        let avg_rows = Self::estimate_avg_rows(limit, index_granularity);
 
-        for column_def in columns_to_read {
-            result.push(Column {
-                column_def: column_def.clone(),
-                data: Vec::new(),
-            });
-        }
+        let mut result = Vec::new();
+        Self::add_columns(&mut result, columns_to_read.clone(), avg_rows);
 
-        let mut columns_to_filter = Vec::new();
+        let mut compiled_filter = None;
+        let mut use_filter_optimization = false;
 
-        let use_filter_optimization = if let Some(ref filter) = filter {
-            Self::extract_filter_columns(
-                filter,
-                &table_config.metadata.schema.columns,
-                &mut columns_to_filter,
-            )?;
-
-            columns_to_filter
-                .iter()
-                .all(|col_def| table_config.metadata.schema.primary_key.contains(col_def))
-        } else {
-            false
-        };
-
-        for column_def in &columns_to_filter {
-            // TODO: allow partial cmp, e.g., part is in PK, part is not.
-            if !result.iter().any(|col| col.column_def == *column_def) {
-                result.push(Column {
-                    column_def: column_def.clone(),
-                    data: Vec::new(),
-                });
-            }
-        }
-
-        if let Some(sort_by) = &order_by {
-            for column_def in sort_by.iter().flatten() {
-                if !result.iter().any(|col| col.column_def == *column_def) {
-                    result.push(Column {
-                        column_def: column_def.clone(),
-                        data: Vec::new(),
-                    });
-                }
-            }
-        }
-
-        for part_info in &table_config.infos {
-            let marks_all = if use_filter_optimization {
-                let marks_indexes = Self::parse_complex_filter_granule(
-                    &part_info.marks,
-                    &table_config.metadata.schema.primary_key,
-                    *filter.as_ref().unwrap().clone(),
-                )?;
-
-                let marks_infos: Vec<_> = marks_indexes
-                    .into_iter()
-                    .map(|mark_idx| part_info.marks[mark_idx].info.clone())
-                    .collect();
-
-                let mut marks_all = vec![vec![]; part_info.column_defs.len()];
-                for mark in marks_infos {
-                    for idx in 0..part_info.column_defs.len() {
-                        marks_all[idx].push(mark[idx].clone());
-                    }
-                }
-
-                marks_all
-            } else {
-                let mut marks_all = vec![vec![]; part_info.column_defs.len()];
-                for mark in part_info.marks.iter().map(|m| &m.info) {
-                    for idx in 0..part_info.column_defs.len() {
-                        marks_all[idx].push(mark[idx].clone());
-                    }
-                }
-                marks_all
-            };
-            for col in &mut result {
-                if let Some(storage_idx) = part_info
-                    .column_defs
-                    .iter()
-                    .position(|col_def| col_def == &col.column_def)
-                {
-                    let marks = &marks_all[storage_idx];
-                    let column_data = part_info.read_column(&table_def, &col.column_def, marks)?;
-                    col.data.extend(column_data.data);
-                } else {
-                    col.data
-                        .extend(vec![Value::Null; part_info.row_count as usize]);
-                }
-            }
-        }
         if let Some(filter) = filter {
-            let row_count = result.first().map_or(0, |col| col.data.len());
+            let filter = CompiledFilter::compile(*filter, &table_config.metadata.schema.columns)?;
 
-            let row_column_defs: Vec<_> = result
-                .iter()
-                .filter_map(|col| {
-                    if columns_to_filter.contains(&col.column_def) {
-                        Some(col.column_def.clone())
-                    } else {
-                        None
-                    }
-                })
+            let mut columns_to_filter = Vec::new();
+
+            filter.get_column_defs(&mut columns_to_filter);
+            compiled_filter = Some(filter);
+
+            let columns_to_filter: Vec<_> = columns_to_filter
+                .into_iter()
+                .map(|col_idx| table_config.metadata.schema.columns[col_idx].clone())
                 .collect();
 
-            let mut rows_to_keep = Vec::with_capacity(row_count);
-            for row_idx in 0..row_count {
-                let row_values: Vec<_> = result
+            // TODO: allow partial cmp, e.g., part is in PK, part is not.
+            if columns_to_filter
+                .iter()
+                .all(|col_def| table_config.metadata.schema.primary_key.contains(col_def))
+            {
+                use_filter_optimization = true;
+            }
+            Self::add_columns(&mut result, columns_to_filter, avg_rows);
+        }
+
+        if let Some(order_by) = &order_by {
+            Self::add_columns(
+                &mut result,
+                order_by.iter().flatten().cloned().collect(),
+                avg_rows,
+            );
+        }
+
+        let result_col_defs: Vec<_> = result.iter().map(|col| col.column_def.clone()).collect();
+        let result = Arc::new(RwLock::new(result));
+
+        Self::scan_table_parts(ScanConfig {
+            result: Arc::clone(&result),
+            infos: table_config.infos.clone(),
+            use_filter_optimization,
+            compiled_filter,
+            table_col_defs: table_config.metadata.schema.columns.clone(),
+            pk_col_defs: table_config.metadata.schema.primary_key.clone(),
+            result_col_defs,
+            index_granularity,
+            table_def: table_def.clone(),
+            limit,
+            offset,
+        })?;
+
+        let result = Arc::try_unwrap(result)
+            .map_err(|_| {
+                Error::Internal("Some threads are leaked and have not finished.".to_string())
+            })?
+            .into_inner()
+            .map_err(|error| Error::Internal(format!("Failed to get inner Arc data: {error}")))?;
+
+        let result = Self::apply_post_processing(
+            result,
+            order_by,
+            &table_config.metadata.settings.engine,
+            &table_config.metadata.schema.primary_key,
+            &columns_to_read,
+            limit,
+            offset,
+        )?;
+
+        Ok(OutputTable::new(result))
+    }
+
+    fn load_values<'a>(
+        marks: &'a [Mark],
+        pk_col_defs: &[ColumnDef],
+        col_def: &ColumnDef,
+    ) -> Vec<&'a Value> {
+        marks
+            .iter()
+            .map(|mark| {
+                let idx = pk_col_defs
                     .iter()
-                    .filter_map(|col| {
-                        if columns_to_filter.contains(&col.column_def) {
-                            Some(col.data[row_idx].clone())
+                    .position(|pk_col_def| pk_col_def == col_def);
+                if let Some(idx) = idx {
+                    &mark.index[idx]
+                } else {
+                    &Value::Null
+                }
+            })
+            .collect()
+    }
+
+    fn parse_complex_filter_granule(
+        marks: &[Mark],
+        filter: &CompiledFilter,
+        pk_col_defs: &[ColumnDef],
+        table_col_defs: &[ColumnDef],
+    ) -> Vec<usize> {
+        match filter {
+            CompiledFilter::Compare { col_idx, op, value } => {
+                let values = Self::load_values(marks, pk_col_defs, &table_col_defs[*col_idx]);
+
+                match *op {
+                    BinOp::Eq => {
+                        let start = values.partition_point(|&v| v < value);
+                        let start = start.saturating_sub(1);
+                        let end = values.partition_point(|&v| v <= value);
+                        (start..end).collect()
+                    }
+                    BinOp::NotEq => (0..marks.len()).collect(), // cannot determine if it's present without reading
+                    BinOp::Lt => {
+                        let end = values.partition_point(|&v| v < value);
+                        (0..end).collect()
+                    }
+                    BinOp::LtEq => {
+                        let end = values.partition_point(|&v| v <= value);
+                        (0..end).collect()
+                    }
+                    BinOp::Gt => {
+                        let start = values.partition_point(|&v| v <= value);
+                        let start = start.saturating_sub(1);
+                        (start..marks.len()).collect()
+                    }
+                    BinOp::GtEq => {
+                        let start = values.partition_point(|&v| v < value);
+                        let start = start.saturating_sub(1);
+                        (start..marks.len()).collect()
+                    }
+                }
+            }
+            CompiledFilter::CompareColumns {
+                left_idx,
+                op,
+                right_idx,
+            } => {
+                let left_values = Self::load_values(marks, pk_col_defs, &table_col_defs[*left_idx]);
+                let right_values =
+                    Self::load_values(marks, pk_col_defs, &table_col_defs[*right_idx]);
+
+                left_values
+                    .into_iter()
+                    .zip(right_values)
+                    .enumerate()
+                    .filter_map(|(idx, (a, b))| {
+                        if CompiledFilter::cmp_vals(a, b, op) {
+                            Some(idx)
                         } else {
                             None
                         }
                     })
-                    .collect();
+                    .collect()
+            }
+            CompiledFilter::Or(a, b) => {
+                let mut left =
+                    Self::parse_complex_filter_granule(marks, a, pk_col_defs, table_col_defs);
+                let right =
+                    Self::parse_complex_filter_granule(marks, b, pk_col_defs, table_col_defs);
 
-                if Self::parse_complex_filter_row_is_allowed(
-                    &row_column_defs,
-                    &row_values,
-                    *filter.clone(),
-                )? {
-                    rows_to_keep.push(row_idx);
+                for i in right {
+                    if !left.contains(&i) {
+                        left.push(i);
+                    }
+                }
+
+                left
+            }
+            CompiledFilter::And(a, b) => {
+                let mut left =
+                    Self::parse_complex_filter_granule(marks, a, pk_col_defs, table_col_defs);
+                let right =
+                    Self::parse_complex_filter_granule(marks, b, pk_col_defs, table_col_defs);
+
+                left.retain(|idx| right.contains(idx));
+                left
+            }
+            CompiledFilter::Not(inner) => {
+                let result =
+                    Self::parse_complex_filter_granule(marks, inner, pk_col_defs, table_col_defs);
+                (0..marks.len()).filter(|x| !result.contains(x)).collect()
+            }
+            CompiledFilter::Const(value) => {
+                if *value {
+                    (0..marks.len()).collect()
+                } else {
+                    Vec::new()
                 }
             }
+            CompiledFilter::Column(col_idx) => {
+                let left_values = Self::load_values(marks, pk_col_defs, &table_col_defs[*col_idx]);
 
-            for column in &mut result {
-                let mut old_data = std::mem::take(&mut column.data);
-                column.data = rows_to_keep
+                left_values
                     .iter()
-                    .map(|&idx| std::mem::take(&mut old_data[idx]))
-                    .collect();
+                    .enumerate()
+                    .filter_map(|(idx, &value)| {
+                        if let Value::Bool(val) = value
+                            && !*val
+                        {
+                            None
+                        } else {
+                            Some(idx)
+                        }
+                    })
+                    .collect()
             }
         }
+    }
 
+    fn estimate_avg_rows(limit: Option<u64>, index_granularity: usize) -> usize {
+        if let Some(limit) = limit {
+            (limit as usize).min(5 * index_granularity)
+        } else {
+            5 * index_granularity
+        }
+    }
+
+    fn add_columns(result: &mut Vec<Column>, columns_defs: Vec<ColumnDef>, avg_rows: usize) {
+        for column_def in columns_defs {
+            if !result.iter().any(|col| col.column_def == column_def) {
+                result.push(Column {
+                    column_def,
+                    data: Vec::with_capacity(avg_rows),
+                });
+            }
+        }
+    }
+
+    fn scan_table_parts(config: ScanConfig) -> Result<()> {
+        let ScanConfig {
+            result,
+            infos,
+            use_filter_optimization,
+            compiled_filter,
+            table_col_defs,
+            pk_col_defs,
+            result_col_defs,
+            index_granularity,
+            table_def,
+            limit,
+            offset,
+        } = config;
+
+        let table_col_defs = &table_col_defs;
+        let pk_col_defs = &pk_col_defs;
+        let table_def = &table_def;
+        let should_stop = Arc::new(AtomicBool::new(false));
+        let result_col_defs = Arc::new(result_col_defs);
+        let total_len = Arc::new(AtomicUsize::new(0));
+
+        for part_info in &infos {
+            if should_stop.load(Ordering::Relaxed) {
+                break;
+            }
+
+            let mut file_mmaps = Vec::with_capacity(part_info.column_defs.len());
+
+            for col_def in &part_info.column_defs {
+                let mmap = Column::open_as_mmap(&part_info.get_column_path(table_def, col_def))?;
+                Column::validate_mmap(&mmap, &col_def.name)?;
+
+                file_mmaps.push(mmap);
+            }
+
+            let file_mmaps = Arc::new(file_mmaps);
+
+            let marks_to_scan: Vec<_> =
+                if use_filter_optimization && let Some(compiled_filter) = &compiled_filter {
+                    let marks_indexes = Self::parse_complex_filter_granule(
+                        &part_info.marks,
+                        compiled_filter,
+                        pk_col_defs,
+                        table_col_defs,
+                    );
+                    marks_indexes
+                        .into_iter()
+                        .map(|mark_idx| &part_info.marks[mark_idx].info)
+                        .collect()
+                } else {
+                    part_info.marks.iter().map(|mark| &mark.info).collect()
+                };
+            if should_stop.load(Ordering::Relaxed) {
+                break;
+            }
+
+            marks_to_scan
+                .par_chunks(10)
+                .try_for_each(|chunk_granule_marks| {
+                    LOCAL_BUFFER.with(|buffer| {
+                        let mut buffer = buffer.borrow_mut();
+                        *buffer = vec![Vec::with_capacity(index_granularity); result_col_defs.len()];
+                    });
+
+                    if should_stop.load(Ordering::Relaxed) {
+                        return Ok(());
+                    }
+
+                    let mut granule_buffer = GranuleBuffer {
+                        data_bytes: vec![None; result_col_defs.len()],
+                        mask: Vec::with_capacity(index_granularity),
+                    };
+
+                    for &granule_marks in chunk_granule_marks {
+                        if should_stop.load(Ordering::Relaxed) {
+                            return Ok(());
+                        }
+
+                        let mut row_count = None;
+
+                        for (file_and_col_idx, file_mmap) in file_mmaps.iter().enumerate()
+                        {
+
+                            let result_idx = result_col_defs.iter().position(|col_def| {
+                                *col_def == part_info.column_defs[file_and_col_idx]
+                            });
+                            if let Some(result_idx) = result_idx {
+                                let granule_bytes = TablePartInfo::get_granule_bytes_decompressed(
+                                    file_mmap,
+                                    &granule_marks[file_and_col_idx],
+                                    &result_col_defs[result_idx].constraints.compression_type,
+                                )?;
+                                if row_count.is_none() {
+                                    row_count = Some(unsafe {
+                                        rkyv::access_unchecked::<ArchivedVec<ArchivedValue>>(
+                                            &granule_bytes,
+                                        )
+                                        .len()
+                                    });
+                                }
+                                granule_buffer.data_bytes[result_idx] = Some(granule_bytes);
+                            }
+                        }
+
+                        if let Some(row_count) = row_count {
+                            if let Some(compiled_filter) = &compiled_filter {
+                                granule_buffer.fill_mask(
+                                    compiled_filter,
+                                    &result_col_defs,
+                                    table_col_defs,
+                                    row_count,
+                                )?;
+                            }
+
+                            let mut archived_values = Vec::with_capacity(granule_buffer.data_bytes.len());
+
+                            for col in &granule_buffer.data_bytes {
+                                if let Some(col_bytes) = col {
+                                    let values = unsafe {
+                                        rkyv::access_unchecked::<ArchivedVec<ArchivedValue>>(
+                                            col_bytes,
+                                        )
+                                    };
+                                    archived_values.push(Some(values));
+                                } else {
+                                    archived_values.push(None);
+                                }
+                            }
+                            let allowed_count = granule_buffer.mask.iter().filter(|x| **x).count();
+                            if should_stop.load(Ordering::Relaxed) {
+                                return Ok(());
+                            }
+
+                            for (idx, col_values) in archived_values.iter().enumerate() {
+                                let col_values = if let Some(col_values_) = col_values {
+                                    let mut res = Vec::with_capacity(col_values_.len());
+                                    for (val_idx, col_value) in col_values_.iter().enumerate() {
+                                        if granule_buffer.mask.is_empty()
+                                            || granule_buffer.mask[val_idx]
+                                        {
+                                            let col_values =
+                                                rkyv::deserialize::<Value, rkyv::rancor::Error>(
+                                                    col_value,
+                                                )
+                                                .map_err(|error| {
+                                                    Error::CouldNotReadData(format!("Could not deserialize value in column ({}): {error}", result_col_defs[idx].name))
+                                                })?;
+                                            res.push(col_values);
+                                        }
+                                    }
+
+                                    res
+                                } else {
+                                    vec![Value::Null; allowed_count]
+                                };
+                                LOCAL_BUFFER.with(|buffer| {
+                                    let mut buffer = buffer.borrow_mut();
+                                    buffer[idx].extend(col_values);
+                                });
+                            }
+
+                            total_len.fetch_add(allowed_count, Ordering::Relaxed);
+
+                            if let Some(limit) = limit && total_len.load(Ordering::Relaxed) as u64 >= limit.saturating_add(offset) {
+                                    should_stop.store(true, Ordering::Relaxed);
+                                    return Ok(());
+                            }
+
+                            for archived_vec in &mut granule_buffer.data_bytes {
+                                *archived_vec = None;
+                            }
+                            granule_buffer.mask.clear();
+                        }
+                    }
+                    let mut guard = result.write().map_err(|error| Error::Internal(format!("RwLock poisoning while reading: {error}")))?;
+                    for (idx, col) in LOCAL_BUFFER.take().into_iter().enumerate() {
+                        guard[idx].data.extend(col);
+                    }
+
+                    Ok(())
+                })?;
+        }
+
+        Ok(())
+    }
+
+    fn apply_post_processing(
+        mut result: Vec<Column>,
+        order_by: Option<&Vec<Vec<ColumnDef>>>,
+        engine_name: &EngineName,
+        pk_col_defs: &[ColumnDef],
+        columns_to_read: &[ColumnDef],
+        limit: Option<u64>,
+        offset: u64,
+    ) -> Result<Vec<Column>> {
         if let Some(sort_by) = &order_by {
-            let engine = table_config
-                .metadata
-                .settings
-                .engine
-                .get_engine(EngineConfig::default());
+            let engine = engine_name.get_engine(EngineConfig::default());
             for sort_by_ in *sort_by {
-                result = engine.order_columns(
-                    result,
-                    sort_by_,
-                    &table_config.metadata.schema.primary_key,
-                )?;
+                result = engine.order_columns(result, sort_by_, pk_col_defs)?;
             }
         }
 
@@ -196,533 +510,238 @@ impl CommandRunner {
                 column.data.truncate(limit as usize);
             }
         }
-
-        Ok(OutputTable::new(result))
-    }
-
-    fn parse_complex_filter_granule(
-        marks: &[Mark],
-        pk_col_defs: &[ColumnDef],
-        filter: Expr,
-    ) -> Result<Vec<usize>> {
-        match filter {
-            Expr::BinaryOp { op, left, right } => match op {
-                BinOp::Gt | BinOp::GtEq | BinOp::Lt | BinOp::LtEq | BinOp::Eq | BinOp::NotEq => {
-                    Self::binary_cmp_granule(marks, pk_col_defs, op, *left, *right)
-                }
-                BinOp::And => {
-                    let mut left = Self::parse_complex_filter_granule(marks, pk_col_defs, *left)?;
-                    let right = Self::parse_complex_filter_granule(marks, pk_col_defs, *right)?;
-
-                    left.retain(|idx| right.contains(idx));
-
-                    Ok(left)
-                }
-                BinOp::Or => {
-                    let mut left = Self::parse_complex_filter_granule(marks, pk_col_defs, *left)?;
-                    let right = Self::parse_complex_filter_granule(marks, pk_col_defs, *right)?;
-
-                    left.extend(right);
-                    left.sort_unstable();
-                    left.dedup();
-                    Ok(left)
-                }
-                _ => Ok(vec![]),
-            },
-            Expr::UnaryOp { op, expr } => {
-                if let UnaryOperator::Not = op {
-                    let not_to_include =
-                        Self::parse_complex_filter_granule(marks, pk_col_defs, *expr)?;
-                    Ok((0..marks.len())
-                        .filter(|idx| !not_to_include.contains(idx))
-                        .collect())
-                } else {
-                    Err(Error::InvalidSource(
-                        "Currently do not support filters with unary operators except NOT"
-                            .to_string(),
-                    ))
-                }
-            }
-            Expr::Value(value) => {
-                if let SQLValue::Boolean(bool) = value.value {
-                    if bool {
-                        Ok((0..marks.len()).collect())
-                    } else {
-                        Ok(Vec::new())
-                    }
-                } else {
-                    Ok((0..marks.len()).collect())
-                }
-            }
-            Expr::Identifier(_) => {
-                Ok((0..marks.len()).collect()) // todo: replace when minmax index is introduced
-            }
-            expr => Err(Error::UnsupportedFilter(format!(
-                "Unsupported expression type in filter: {expr}"
-            ))),
-        }
-    }
-
-    fn binary_cmp_granule(
-        marks: &[Mark],
-        pk_col_defs: &[ColumnDef],
-        op: BinOp,
-        left: Expr,
-        right: Expr,
-    ) -> Result<Vec<usize>> {
-        match (left, right) {
-            (Expr::Identifier(left), Expr::Value(right)) => {
-                let left = parse_ident(&left, pk_col_defs)?;
-                let right = Value::try_from((right.value, &left.field_type))?;
-
-                let left_index = pk_col_defs
-                    .iter()
-                    .position(|col| col.name == left.name)
-                    .ok_or(Error::InvalidSource(format!(
-                        "Column ({}) is not found in primary key.",
-                        left.name
-                    )))?;
-
-                let values: Vec<&Value> =
-                    marks.iter().map(|mark| &mark.index[left_index]).collect();
-
-                let result_indices = match op {
-                    BinOp::Eq => {
-                        let start = values.partition_point(|&v| v < &right);
-                        let start = start.saturating_sub(1);
-                        let end = values.partition_point(|&v| v <= &right);
-                        (start..end).collect()
-                    }
-                    BinOp::NotEq => (0..marks.len()).collect(), // cannot determine if it's present without reading
-                    BinOp::Lt => {
-                        let end = values.partition_point(|&v| v < &right);
-                        (0..end).collect()
-                    }
-                    BinOp::LtEq => {
-                        let end = values.partition_point(|&v| v <= &right);
-                        (0..end).collect()
-                    }
-                    BinOp::Gt => {
-                        let start = values.partition_point(|&v| v <= &right);
-                        let start = start.saturating_sub(1);
-                        (start..marks.len()).collect()
-                    }
-                    BinOp::GtEq => {
-                        let start = values.partition_point(|&v| v < &right);
-                        let start = start.saturating_sub(1);
-                        (start..marks.len()).collect()
-                    }
-                    _ => {
-                        return Err(Error::UnsupportedFilter(format!(
-                            "Not supported operator: ({op})",
-                        )));
-                    }
-                };
-
-                Ok(result_indices)
-            }
-            (Expr::Value(left), Expr::Identifier(right)) => {
-                let flipped_op = Self::flip_bin_op_simple(op)?;
-                Self::binary_cmp_granule(
-                    marks,
-                    pk_col_defs,
-                    flipped_op,
-                    Expr::Identifier(right),
-                    Expr::Value(left),
-                )
-            }
-            (Expr::Value(left), Expr::Value(right)) => {
-                let left = Self::parse_sql_value(left.value)?;
-                let right = Self::parse_sql_value(right.value)?;
-
-                let result = Self::evaluate_binary_op(&op, &left, &right)?;
-                if result {
-                    Ok((0..marks.len()).collect())
-                } else {
-                    Ok(Vec::new())
-                }
-            }
-            (left, right) => Err(Error::UnsupportedFilter(format!(
-                "invalid filter left and right: ({left}), ({right})"
-            ))),
-        }
-    }
-
-    fn parse_complex_filter_row_is_allowed(
-        row_column_defs: &[ColumnDef],
-        row_values: &[Value],
-        filter: Expr,
-    ) -> Result<bool> {
-        match filter {
-            Expr::BinaryOp { op, left, right } => match op {
-                BinOp::Gt | BinOp::GtEq | BinOp::Lt | BinOp::LtEq | BinOp::Eq | BinOp::NotEq => {
-                    Self::binary_cmp_row(row_column_defs, row_values, op, *left, *right)
-                }
-                BinOp::And => {
-                    let left = Self::parse_complex_filter_row_is_allowed(
-                        row_column_defs,
-                        row_values,
-                        *left,
-                    )?;
-                    let right = Self::parse_complex_filter_row_is_allowed(
-                        row_column_defs,
-                        row_values,
-                        *right,
-                    )?;
-
-                    Ok(left && right)
-                }
-                BinOp::Or => {
-                    let left = Self::parse_complex_filter_row_is_allowed(
-                        row_column_defs,
-                        row_values,
-                        *left,
-                    )?;
-                    let right = Self::parse_complex_filter_row_is_allowed(
-                        row_column_defs,
-                        row_values,
-                        *right,
-                    )?;
-
-                    Ok(left || right)
-                }
-                _ => Ok(true),
-            },
-            Expr::UnaryOp { op, expr } => {
-                if let UnaryOperator::Not = op {
-                    Self::parse_complex_filter_row_is_allowed(row_column_defs, row_values, *expr)
-                        .map(|x| !x)
-                } else {
-                    Err(Error::InvalidSource(
-                        "Currently do not support filters with unary operators except NOT"
-                            .to_string(),
-                    ))
-                }
-            }
-            Expr::Value(value) => {
-                if let SQLValue::Boolean(value) = value.value {
-                    Ok(value)
-                } else {
-                    Ok(true)
-                }
-            }
-            Expr::Identifier(ident) => {
-                let Some(column_position) = row_column_defs
-                    .iter()
-                    .position(|col_def| col_def.name == ident.value)
-                else {
-                    return Err(Error::InvalidSource(format!(
-                        "Column ({}) is not found in columns.",
-                        ident.value
-                    )));
-                };
-                let value =
-                    row_values
-                        .get(column_position)
-                        .ok_or(Error::InvalidSource(format!(
-                            "Value (idx: {column_position}) is not found in columns."
-                        )))?;
-                if let Value::Bool(value) = value {
-                    Ok(*value)
-                } else {
-                    Ok(true)
-                }
-            }
-            expr => Err(Error::UnsupportedFilter(format!(
-                "Unsupported expression type in filter: {expr}"
-            ))),
-        }
-    }
-
-    fn binary_cmp_row(
-        row_column_defs: &[ColumnDef],
-        row_values: &[Value],
-        op: BinOp,
-        left: Expr,
-        right: Expr,
-    ) -> Result<bool> {
-        match (left, right) {
-            (Expr::Value(left), Expr::Value(right)) => {
-                let left = Self::parse_sql_value(left.value)?;
-                let right = Self::parse_sql_value(right.value)?;
-
-                Self::evaluate_binary_op(&op, &left, &right)
-            }
-            (Expr::Identifier(left), Expr::Value(right)) => {
-                let left = parse_ident(&left, row_column_defs)?;
-                let right = Value::try_from((right.value, &left.field_type))?;
-
-                let Some(left_pos) = row_column_defs.iter().position(|col_def| *col_def == left)
-                else {
-                    return Err(Error::InvalidSource(format!(
-                        "Column '{}' not found in row",
-                        left.name
-                    )));
-                };
-                let left = row_values[left_pos].clone();
-
-                Self::evaluate_binary_op(&op, &left, &right)
-            }
-            (Expr::Value(left), Expr::Identifier(right)) => {
-                let flipped_op = Self::flip_bin_op_simple(op)?;
-
-                Self::binary_cmp_row(
-                    row_column_defs,
-                    row_values,
-                    flipped_op,
-                    Expr::Identifier(right),
-                    Expr::Value(left),
-                )
-            }
-            (Expr::Identifier(left), Expr::Identifier(right)) => {
-                let left = parse_ident(&left, row_column_defs)?;
-                let right = parse_ident(&right, row_column_defs)?;
-
-                let Some(left_pos) = row_column_defs.iter().position(|col_def| *col_def == left)
-                else {
-                    return Err(Error::InvalidSource(format!(
-                        "Column '{}' not found in row",
-                        left.name
-                    )));
-                };
-                let left = row_values[left_pos].clone();
-
-                let Some(right_pos) = row_column_defs.iter().position(|col_def| *col_def == right)
-                else {
-                    return Err(Error::InvalidSource(format!(
-                        "Column '{}' not found in row",
-                        right.name
-                    )));
-                };
-                let right = row_values[right_pos].clone();
-
-                Self::evaluate_binary_op(&op, &left, &right)
-            }
-            _ => Err(Error::InvalidSource(
-                "Unsupported comparison operands in filter".to_string(),
-            )),
-        }
-    }
-
-    fn evaluate_binary_op(op: &BinOp, left: &Value, right: &Value) -> Result<bool> {
-        if left.get_type() != right.get_type() {
-            return Err(Error::InvalidSource(format!(
-                "Type mismatch in comparison: {:?} vs {:?}",
-                left.get_type(),
-                right.get_type()
-            )));
-        }
-
-        Ok(match op {
-            BinOp::Eq => left == right,
-            BinOp::NotEq => left != right,
-            BinOp::Lt => left < right,
-            BinOp::LtEq => left <= right,
-            BinOp::Gt => left > right,
-            BinOp::GtEq => left >= right,
-            _ => {
-                return Err(Error::UnsupportedFilter(format!(
-                    "not supported operator: ({op})",
-                )));
-            }
-        })
-    }
-
-    fn parse_sql_value(value: SQLValue) -> Result<Value> {
-        match value {
-            SQLValue::Null => Ok(Value::Null),
-            SQLValue::SingleQuotedString(s)
-            | SQLValue::TripleSingleQuotedString(s)
-            | SQLValue::TripleDoubleQuotedString(s) => Ok(Value::String(s)),
-            SQLValue::Number(number, _) => {
-                Ok(Value::Int64(number.parse().map_err(|_| {
-                    Error::InvalidSource(format!("Failed to parse number: {number}"))
-                })?))
-            }
-            SQLValue::Boolean(b) => Ok(Value::Bool(b)),
-            _ => Err(Error::InvalidSource(format!(
-                "Unsupported SQL value type: {value:?}"
-            ))),
-        }
-    }
-
-    /// Extracts column names referenced in filter expression and adds them to `columns_to_read` if not already present.
-    fn extract_filter_columns(
-        expr: &Expr,
-        columns: &[ColumnDef],
-        columns_to_filter: &mut Vec<ColumnDef>,
-    ) -> Result<()> {
-        match expr {
-            Expr::Identifier(ident) => {
-                let column_def = parse_ident(ident, columns)?;
-
-                if !columns_to_filter.contains(&column_def) {
-                    columns_to_filter.push(column_def);
-                }
-                Ok(())
-            }
-            Expr::BinaryOp { left, right, .. } => {
-                Self::extract_filter_columns(left, columns, columns_to_filter)?;
-                Self::extract_filter_columns(right, columns, columns_to_filter)?;
-                Ok(())
-            }
-            Expr::UnaryOp { expr, .. } => {
-                Self::extract_filter_columns(expr, columns, columns_to_filter)?;
-                Ok(())
-            }
-            Expr::Value(_) => Ok(()),
-            _ => Err(Error::UnsupportedCommand(
-                "Unsupported expression in WHERE clause".to_string(),
-            )),
-        }
-    }
-
-    fn flip_bin_op_simple(op: BinOp) -> Result<BinOp> {
-        Ok(match op {
-            BinOp::Lt => BinOp::Gt,
-            BinOp::LtEq => BinOp::GtEq,
-            BinOp::Gt => BinOp::Lt,
-            BinOp::GtEq => BinOp::LtEq,
-            BinOp::Eq | BinOp::NotEq => op,
-            _ => {
-                return Err(Error::InvalidSource(format!("Cannot flip operator: {op}")));
-            }
-        })
+        Ok(result)
     }
 }
 
-#[cfg(test)]
-mod tests {
-    mod parse_single_binary_cmp {
-        use crate::error::Result;
-        use crate::sql::CommandRunner;
-        use crate::storage::{ColumnDef, Constraints, Mark, Value, ValueType};
-        use sqlparser::ast::{
-            BinaryOperator as BinOp, Expr, Ident, Value as SQLValue, ValueWithSpan,
-        };
-        use sqlparser::tokenizer::Span;
+#[derive(Debug)]
+struct GranuleBuffer {
+    data_bytes: Vec<Option<Vec<u8>>>,
+    mask: Vec<bool>,
+}
 
-        fn mark(index: Vec<Value>) -> Mark {
-            Mark {
-                index,
-                info: Vec::new(),
+impl GranuleBuffer {
+    fn fill_mask(
+        &mut self,
+        filter: &CompiledFilter,
+        granule_col_defs: &[ColumnDef],
+        table_col_defs: &[ColumnDef],
+        row_count: usize,
+    ) -> Result<()> {
+        let mask = Self::eval_filter_vectorized(
+            filter,
+            &self.data_bytes,
+            granule_col_defs,
+            table_col_defs,
+            row_count,
+        )?;
+
+        self.mask.extend(mask);
+        Ok(())
+    }
+
+    fn eval_filter_vectorized(
+        filter: &CompiledFilter,
+        granule_data: &[Option<Vec<u8>>],
+        granule_col_defs: &[ColumnDef],
+        table_col_defs: &[ColumnDef],
+        row_count: usize,
+    ) -> Result<Vec<bool>> {
+        match filter {
+            CompiledFilter::Compare { col_idx, op, value } => {
+                let data_idx = granule_col_defs
+                    .iter()
+                    .position(|col_def| *col_def == table_col_defs[*col_idx]);
+
+                if let Some(data_idx) = data_idx
+                    && let Some(col_data) = &granule_data[data_idx]
+                {
+                    let values =
+                        unsafe { rkyv::access_unchecked::<ArchivedVec<ArchivedValue>>(col_data) };
+                    Ok(values
+                        .iter()
+                        .map(|row_value| CompiledFilter::cmp_vals(row_value, value, op))
+                        .collect())
+                } else {
+                    Ok(vec![false; row_count])
+                }
             }
-        }
+            CompiledFilter::CompareColumns {
+                left_idx,
+                op,
+                right_idx,
+            } => {
+                let left_data_idx = granule_col_defs
+                    .iter()
+                    .position(|col_def| *col_def == table_col_defs[*left_idx]);
+                let right_data_idx = granule_col_defs
+                    .iter()
+                    .position(|col_def| *col_def == table_col_defs[*right_idx]);
 
-        fn num(n: i64) -> Expr {
-            Expr::Value(ValueWithSpan {
-                value: SQLValue::Number(n.to_string(), false),
-                span: Span::empty(),
-            })
-        }
+                match (left_data_idx, right_data_idx) {
+                    (Some(left_idx), Some(right_idx)) => {
+                        match (&granule_data[left_idx], &granule_data[right_idx]) {
+                            (Some(left_data), Some(right_data)) => {
+                                let left_values = unsafe {
+                                    rkyv::access_unchecked::<ArchivedVec<ArchivedValue>>(left_data)
+                                };
+                                let right_values = unsafe {
+                                    rkyv::access_unchecked::<ArchivedVec<ArchivedValue>>(right_data)
+                                };
+                                Ok(left_values
+                                    .iter()
+                                    .zip(right_values.iter())
+                                    .map(|(left_val, right_val)| {
+                                        CompiledFilter::cmp_vals(left_val, right_val, op)
+                                    })
+                                    .collect())
+                            }
+                            (Some(left_data), None) => {
+                                let left_values = unsafe {
+                                    rkyv::access_unchecked::<ArchivedVec<ArchivedValue>>(left_data)
+                                };
 
-        fn id() -> Expr {
-            Expr::Identifier(Ident::new("id"))
-        }
+                                Ok(left_values
+                                    .iter()
+                                    .map(|left_val| {
+                                        CompiledFilter::cmp_vals(left_val, &ArchivedValue::Null, op)
+                                    })
+                                    .collect())
+                            }
+                            (None, Some(right_data)) => {
+                                let right_values = unsafe {
+                                    rkyv::access_unchecked::<ArchivedVec<ArchivedValue>>(right_data)
+                                };
 
-        fn cmp(op: BinOp, left: Expr, right: Expr) -> Result<Vec<usize>> {
-            let (marks, column_defs) = get_marks_column_defs();
-            CommandRunner::binary_cmp_granule(&marks, &column_defs, op, left, right)
-        }
+                                Ok(right_values
+                                    .iter()
+                                    .map(|right_val| {
+                                        CompiledFilter::cmp_vals(
+                                            &ArchivedValue::Null,
+                                            right_val,
+                                            op,
+                                        )
+                                    })
+                                    .collect())
+                            } // TODO: optimize
+                            (None, None) => Ok(vec![false; row_count]),
+                        }
+                    }
+                    (Some(left_idx), None) => {
+                        if let Some(left_data) = &granule_data[left_idx] {
+                            let left_values = unsafe {
+                                rkyv::access_unchecked::<ArchivedVec<ArchivedValue>>(left_data)
+                            };
+                            Ok(left_values
+                                .iter()
+                                .map(|left_val| {
+                                    CompiledFilter::cmp_vals(left_val, &ArchivedValue::Null, op)
+                                })
+                                .collect())
+                        } else {
+                            Ok(vec![false; row_count])
+                        }
+                    }
+                    (None, Some(right_idx)) => {
+                        if let Some(right_data) = &granule_data[right_idx] {
+                            let right_values = unsafe {
+                                rkyv::access_unchecked::<ArchivedVec<ArchivedValue>>(right_data)
+                            };
 
-        fn get_marks_column_defs() -> (Vec<Mark>, Vec<ColumnDef>) {
-            let marks = vec![
-                mark(vec![Value::Int64(1)]),
-                mark(vec![Value::Int64(8193)]),
-                mark(vec![Value::Int64(8193)]),
-                mark(vec![Value::Int64(16385)]),
-                mark(vec![Value::Int64(24577)]),
-            ];
+                            Ok(right_values
+                                .iter()
+                                .map(|right_val| {
+                                    CompiledFilter::cmp_vals(&ArchivedValue::Null, right_val, op)
+                                })
+                                .collect())
+                        } else {
+                            Ok(vec![false; row_count])
+                        }
+                    }
+                    (None, None) => Ok(vec![false; row_count]),
+                }
+            }
+            CompiledFilter::And(left, right) => {
+                let left_mask = Self::eval_filter_vectorized(
+                    left,
+                    granule_data,
+                    granule_col_defs,
+                    table_col_defs,
+                    row_count,
+                )?;
+                let right_mask = Self::eval_filter_vectorized(
+                    right,
+                    granule_data,
+                    granule_col_defs,
+                    table_col_defs,
+                    row_count,
+                )?;
 
-            let column_defs = vec![ColumnDef {
-                name: "id".to_string(),
-                field_type: ValueType::Int64,
-                constraints: Constraints::default(),
-            }];
+                Ok(left_mask
+                    .into_iter()
+                    .zip(right_mask)
+                    .map(|(l, r)| l && r)
+                    .collect())
+            }
+            CompiledFilter::Or(left, right) => {
+                let left_mask = Self::eval_filter_vectorized(
+                    left,
+                    granule_data,
+                    granule_col_defs,
+                    table_col_defs,
+                    row_count,
+                )?;
+                let right_mask = Self::eval_filter_vectorized(
+                    right,
+                    granule_data,
+                    granule_col_defs,
+                    table_col_defs,
+                    row_count,
+                )?;
 
-            (marks, column_defs)
-        }
+                Ok(left_mask
+                    .into_iter()
+                    .zip(right_mask)
+                    .map(|(l, r)| l || r)
+                    .collect())
+            }
+            CompiledFilter::Not(inner) => {
+                let mask = Self::eval_filter_vectorized(
+                    inner,
+                    granule_data,
+                    granule_col_defs,
+                    table_col_defs,
+                    row_count,
+                )?;
 
-        #[test]
-        fn test_eq() {
-            assert_eq!(cmp(BinOp::Eq, id(), num(9000)).unwrap(), [2]);
-            assert_eq!(cmp(BinOp::Eq, id(), num(8193)).unwrap(), [0, 1, 2]);
-            assert_eq!(cmp(BinOp::Eq, id(), num(30000)).unwrap(), [4]);
-            assert_eq!(cmp(BinOp::Eq, id(), num(0)).unwrap(), []);
-        }
+                Ok(mask.into_iter().map(|b| !b).collect())
+            }
+            CompiledFilter::Column(col_idx) => {
+                let data_idx = granule_col_defs
+                    .iter()
+                    .position(|col_def| *col_def == table_col_defs[*col_idx]);
 
-        #[test]
-        fn test_not_eq() {
-            assert_eq!(cmp(BinOp::NotEq, id(), num(5)).unwrap(), [0, 1, 2, 3, 4]);
-        }
+                if let Some(data_idx) = data_idx
+                    && let Some(col_data) = &granule_data[data_idx]
+                {
+                    let values =
+                        unsafe { rkyv::access_unchecked::<ArchivedVec<ArchivedValue>>(col_data) };
 
-        #[test]
-        fn test_gt() {
-            assert_eq!(cmp(BinOp::Gt, id(), num(9000)).unwrap(), [2, 3, 4]);
-            assert_eq!(cmp(BinOp::Gt, id(), num(8193)).unwrap(), [2, 3, 4]);
-            assert_eq!(cmp(BinOp::Gt, id(), num(30000)).unwrap(), [4]);
-            assert_eq!(cmp(BinOp::Gt, id(), num(0)).unwrap(), [0, 1, 2, 3, 4]);
-        }
-
-        #[test]
-        fn test_gt_eq() {
-            assert_eq!(cmp(BinOp::GtEq, id(), num(9000)).unwrap(), [2, 3, 4]);
-            assert_eq!(cmp(BinOp::GtEq, id(), num(8193)).unwrap(), [0, 1, 2, 3, 4]);
-            assert_eq!(cmp(BinOp::GtEq, id(), num(30000)).unwrap(), [4]);
-            assert_eq!(cmp(BinOp::GtEq, id(), num(0)).unwrap(), [0, 1, 2, 3, 4]);
-        }
-
-        #[test]
-        fn test_lt() {
-            assert_eq!(cmp(BinOp::Lt, id(), num(9000)).unwrap(), [0, 1, 2]);
-            assert_eq!(cmp(BinOp::Lt, id(), num(8193)).unwrap(), [0]);
-            assert_eq!(cmp(BinOp::Lt, id(), num(30000)).unwrap(), [0, 1, 2, 3, 4]);
-            assert_eq!(cmp(BinOp::Lt, id(), num(0)).unwrap(), []);
-        }
-
-        #[test]
-        fn test_lt_eq() {
-            assert_eq!(cmp(BinOp::LtEq, id(), num(9000)).unwrap(), [0, 1, 2]);
-            assert_eq!(cmp(BinOp::LtEq, id(), num(8193)).unwrap(), [0, 1, 2]);
-            assert_eq!(cmp(BinOp::LtEq, id(), num(30000)).unwrap(), [0, 1, 2, 3, 4]);
-            assert_eq!(cmp(BinOp::LtEq, id(), num(0)).unwrap(), []);
-        }
-
-        #[test]
-        fn test_lt_eq_gt_eq_rev() {
-            assert_eq!(
-                cmp(BinOp::LtEq, num(9000), id()).unwrap(),
-                cmp(BinOp::GtEq, id(), num(9000)).unwrap()
-            );
-            assert_eq!(
-                cmp(BinOp::LtEq, num(8193), id()).unwrap(),
-                cmp(BinOp::GtEq, id(), num(8193)).unwrap()
-            );
-            assert_eq!(
-                cmp(BinOp::GtEq, num(30000), id()).unwrap(),
-                cmp(BinOp::LtEq, id(), num(30000)).unwrap()
-            );
-            assert_eq!(
-                cmp(BinOp::GtEq, num(0), id()).unwrap(),
-                cmp(BinOp::LtEq, id(), num(0)).unwrap()
-            );
-        }
-
-        #[test]
-        fn test_values_only() {
-            assert_eq!(cmp(BinOp::Eq, num(2), num(3)).unwrap(), []);
-            assert_eq!(cmp(BinOp::NotEq, num(2), num(2)).unwrap(), []);
-            assert_eq!(cmp(BinOp::Gt, num(2), num(2)).unwrap(), []);
-            assert_eq!(cmp(BinOp::GtEq, num(1), num(2)).unwrap(), []);
-            assert_eq!(cmp(BinOp::Lt, num(2), num(1)).unwrap(), []);
-            assert_eq!(cmp(BinOp::LtEq, num(2), num(1)).unwrap(), []);
-
-            assert_eq!(cmp(BinOp::Eq, num(2), num(2)).unwrap(), [0, 1, 2, 3, 4]);
-            assert_eq!(cmp(BinOp::NotEq, num(2), num(3)).unwrap(), [0, 1, 2, 3, 4]);
-            assert_eq!(cmp(BinOp::Gt, num(3), num(2)).unwrap(), [0, 1, 2, 3, 4]);
-            assert_eq!(cmp(BinOp::GtEq, num(2), num(2)).unwrap(), [0, 1, 2, 3, 4]);
-            assert_eq!(cmp(BinOp::Lt, num(1), num(2)).unwrap(), [0, 1, 2, 3, 4]);
-            assert_eq!(cmp(BinOp::LtEq, num(2), num(3)).unwrap(), [0, 1, 2, 3, 4]);
+                    Ok(values
+                        .iter()
+                        .map(|value| {
+                            if let ArchivedValue::Bool(val) = value {
+                                *val
+                            } else {
+                                true
+                            }
+                        })
+                        .collect())
+                } else {
+                    Ok(vec![false; row_count])
+                }
+            }
+            CompiledFilter::Const(value) => Ok(vec![*value; row_count]),
         }
     }
 }

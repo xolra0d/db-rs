@@ -9,6 +9,23 @@ use crate::sql::sql_parser::{LogicalPlan, ScanSource};
 use crate::storage::{ColumnDef, TableDef};
 
 impl LogicalPlan {
+    /// Parses SELECT query into a logical plan tree.
+    ///
+    /// Builds a tree of `LogicalPlan` nodes: Scan -> Filter -> Projection -> OrderBy -> Limit.
+    ///
+    /// Returns:
+    ///   * Ok when:
+    ///     1. Query has single FROM table/subquery, valid projections, optional WHERE/ORDER BY/LIMIT: `LogicalPlan` tree
+    ///   * Error when:
+    ///     1. Query is not a SELECT statement: `UnsupportedCommand`.
+    ///     2. Multiple tables in FROM clause: `UnsupportedCommand`.
+    ///     3. JOIN clause present: `UnsupportedCommand`.
+    ///     4. Empty projection: `UnsupportedCommand`.
+    ///     5. Multiple wildcards or columns after wildcard: `UnsupportedCommand`.
+    ///     6. Non-identifier expressions in projection: `UnsupportedCommand`.
+    ///     7. Duplicate column in projection: `DuplicateColumn`.
+    ///     8. Column not found in table: `ColumnNotFound`.
+    ///     9. Invalid LIMIT/OFFSET value: `InvalidLimitValue`.
     pub fn from_query(query: &Query) -> Result<Self> {
         let SetExpr::Select(select) = &*query.body else {
             return Err(Error::UnsupportedCommand(
@@ -28,7 +45,6 @@ impl LogicalPlan {
                 "JOIN clauses are not currently supported".to_string(),
             ));
         }
-
         let scan_source = match &table.relation {
             TableFactor::Table { name, .. } => {
                 let table_def = TableDef::try_from(name)?;
@@ -208,7 +224,19 @@ impl LogicalPlan {
         Ok(plan)
     }
 
-    /// Extract column definitions from a logical plan
+    /// Extracts column definitions from a logical plan.
+    ///
+    /// Recursively traverses the plan tree to find available columns.
+    ///
+    /// Returns:
+    ///   * Ok when:
+    ///     1. Plan is Projection: columns from projection.
+    ///     2. Plan is Filter/OrderBy/Limit: columns from inner plan.
+    ///     3. Plan is Scan with Table: columns from table metadata.
+    ///     4. Plan is Scan with Subquery: columns from subquery plan.
+    ///   * Error when:
+    ///     1. Table not found in runtime config: `TableNotFound`.
+    ///     2. Unsupported plan type: `UnsupportedCommand`.
     fn extract_columns_from_plan(plan: &LogicalPlan) -> Result<Vec<ColumnDef>> {
         match plan {
             LogicalPlan::Projection { columns, .. } => Ok(columns.clone()),

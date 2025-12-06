@@ -4,7 +4,12 @@ use crate::storage::ColumnDef;
 use sqlparser::ast::{BinaryOperator, Expr};
 
 impl LogicalPlan {
-    /// Plan optimization
+    /// Flattens a logical plan by merging nested query structures.
+    ///
+    /// Applies optimizations: merge scans, filters, projections, order by, and limits.
+    /// Non-query plans (Skip, `CreateDatabase`, `CreateTable`, `Insert`, `Drop`) are returned unchanged.
+    ///
+    /// Returns: Flattened `LogicalPlan`.
     pub fn flatten(self) -> Self {
         match self {
             Self::Skip
