@@ -59,7 +59,7 @@ impl CommandRunner {
             Error::CouldNotCreateTable(format!("Failed to create table dir: {error}"))
         })?;
 
-        if let Err(error) = table_metadata.write_to(&table_def) {
+        if let Err(error) = table_metadata.write_to(table_def) {
             if let Err(cleanup_err) = std::fs::remove_dir_all(table_path) {
                 error!("Failed to cleanup directory after metadata write failure: {cleanup_err}",);
             }
