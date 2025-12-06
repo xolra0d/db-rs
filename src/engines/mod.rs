@@ -6,7 +6,8 @@ use crate::engines::replacing_merge_tree::ReplacingMergeTreeEngine;
 use crate::error::{Error, Result};
 use crate::storage::Column;
 use crate::storage::ColumnDef;
-use serde::{Deserialize, Serialize};
+
+use rkyv::{Archive as RkyvArchive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 
 /// Interface for every engine to follow.
 pub trait Engine {
@@ -20,7 +21,7 @@ pub trait Engine {
 }
 
 /// Used for storing engine name in metadata.
-#[derive(Debug, Serialize, Deserialize, Eq, Hash, PartialEq, Clone)]
+#[derive(Debug, Eq, Hash, PartialEq, Clone, RkyvSerialize, RkyvArchive, RkyvDeserialize)]
 pub enum EngineName {
     MergeTree,
     ReplacingMergeTree,

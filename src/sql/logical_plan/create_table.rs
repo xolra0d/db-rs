@@ -41,6 +41,10 @@ impl LogicalPlan {
             return Err(Error::TableAlreadyExists);
         }
 
+        if create_table.columns.is_empty() {
+            return Err(Error::NoColumnsSpecified);
+        }
+
         let mut columns: Vec<ColumnDef> = Vec::with_capacity(create_table.columns.len());
         let mut columns_names: HashSet<&String> =
             HashSet::with_capacity(create_table.columns.len());
@@ -148,7 +152,7 @@ impl LogicalPlan {
     ///
     /// Returns
     ///   * Ok when:
-    ///     1. All columns are unique, exist in the pool of ALL columns: Vec<ColumnDef>
+    ///     1. All columns are unique, exist in the pool of ALL columns: `Vec<ColumnDef>`
     ///   * Error when:
     ///     1. If no ORDER BY was provided: `InvalidOrderBy`.
     ///     2. If ORDER BY is empty: `InvalidOrderBy`.
@@ -190,7 +194,7 @@ impl LogicalPlan {
     ///
     /// Returns
     ///   * Ok when:
-    ///     1. All columns are unique, exist in the pool of ALL columns: Vec<ColumnDef>
+    ///     1. All columns are unique, exist in the pool of ALL columns: `Vec<ColumnDef>`
     ///   * Error when:
     ///     1. If no ORDER BY was provided: `InvalidOrderBy`.
     ///     2. If ORDER BY is empty: `InvalidOrderBy`.
@@ -233,7 +237,7 @@ impl LogicalPlan {
     ///
     /// Returns:
     ///   * Ok when:
-    ///     1. When provided valid constraint(s): Vec<ColumnDefConstraint>
+    ///     1. When provided valid constraint(s): `Constraints`
     ///   * Error when:
     ///     1. Both NULL and NOT NULL are supplied for the column: `UnsupportedColumnConstraint`
     ///     2. Unsupported column constraint is provided: `UnsupportedColumnConstraint`

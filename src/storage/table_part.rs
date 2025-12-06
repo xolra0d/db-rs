@@ -1,17 +1,14 @@
-use log::{info, warn};
-use serde::{Deserialize, Serialize};
-use std::io::{Read as _, Seek as _};
-use std::path::{Path, PathBuf};
-use uuid::Uuid;
-
 use crate::engines::EngineConfig;
 use crate::error::{Error, Result};
 use crate::runtime_config::{TABLE_DATA, TableConfig};
 use crate::storage::compression::{compress_bytes, decompress_bytes};
-use crate::storage::table_metadata::{
-    TABLE_METADATA_FILENAME, TABLE_METADATA_MAGIC_BYTES, TableMetadata,
-};
-use crate::storage::{Column, ColumnDef, TableDef, Value, read_file_with_crc, write_file_with_crc};
+use crate::storage::table_metadata::TableMetadata;
+use crate::storage::{Column, ColumnDef, CompressionType, TableDef, Value};
+
+use log::{info, warn};
+use rkyv::{Archive as RkyvArchive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
+use std::path::{Path, PathBuf};
+use uuid::Uuid;
 
 pub const MAGIC_BYTES_COLUMN: &[u8] = b"THDATA".as_slice();
 pub const MAGIC_BYTES_INFO: &[u8] = b"THINDX".as_slice();
@@ -19,20 +16,20 @@ pub const PART_INFO_FILENAME: &str = "part.inf";
 
 /// Represents a start byte position and end byte position of the
 /// compressed granule.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, RkyvSerialize, RkyvArchive, RkyvDeserialize)]
 pub struct MarkInfo {
     pub start: u64,
     pub end: u64,
 }
 
 /// Represents a first row of each granule as well as it's starting position and ending.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, RkyvSerialize, RkyvArchive, RkyvDeserialize)]
 pub struct Mark {
     pub index: Vec<Value>,
     pub info: Vec<MarkInfo>, // compression
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, RkyvSerialize, RkyvArchive, RkyvDeserialize)]
 pub struct TablePartInfo {
     pub name: String,
     pub row_count: u64, // max rows per tablepart = 18_446_744_073_709_551_615
@@ -41,6 +38,7 @@ pub struct TablePartInfo {
 }
 
 impl TablePartInfo {
+    /// Returns the filesystem path for a column's data file within this part.
     pub fn get_column_path(&self, table_def: &TableDef, column_def: &ColumnDef) -> PathBuf {
         table_def
             .get_path()
@@ -48,80 +46,125 @@ impl TablePartInfo {
             .join(format!("{}.bin", column_def.name))
     }
 
-    /// Reads and decompresses a column from disk using granule-based storage.
-    ///
-    /// Reads specified granules according to `MarkInfo` slice, decompresses them, and combines into a Column.
+    /// Reads and decompresses a granule from disk.
     ///
     /// Args:
-    ///   * `table_def`: Table definition for path resolution
-    ///   * `column_def`: Column to read
-    ///   * `mark_infos`: Slice of `MarkInfo` for granules to read (selective reading)
+    ///   * `file`: Column file.
+    ///   * `mark_info`: `MarkInfo` of granule
+    ///   * `compression_type`: Compression type for the granule
     ///
-    /// Returns: Column with data from specified granules or `CouldNotReadData` on failure
-    pub fn read_column(
-        &self,
-        table_def: &TableDef,
-        column_def: &ColumnDef,
-        mark_infos: &[MarkInfo],
-    ) -> Result<Column> {
-        let column_path = self.get_column_path(table_def, column_def);
-
-        let mut all_values = Vec::new();
-
-        let mut file = std::fs::File::open(&column_path)
-            .map_err(|e| Error::CouldNotReadData(format!("Failed to read column file: {e}")))?;
-
-        let len_bytes = file.metadata().map(|x| x.len()).map_err(|error| {
-            Error::CouldNotReadData(format!(
-                "Could not read column ({}) metadata: {error}.",
-                column_def.name
-            ))
-        })?;
-
-        if let Some(mark_info) = mark_infos
-            .iter()
-            .find(|mark_info| mark_info.start > len_bytes || mark_info.end > len_bytes)
-        {
+    /// Returns: Vec with data from specified granule or `CouldNotReadData` on failure
+    pub fn get_granule_bytes_decompressed(
+        file: &[u8],
+        mark_info: &MarkInfo,
+        compression_type: &CompressionType,
+    ) -> Result<Vec<u8>> {
+        if mark_info.end < mark_info.start {
             return Err(Error::CouldNotReadData(format!(
-                "Mark ({mark_info:?}) out of bounds. File has only {len_bytes} bytes."
+                "Invalid mark bounds: end ({}) < start ({})",
+                mark_info.end, mark_info.start
             )));
         }
 
-        for mark_info in mark_infos {
-            file.seek(std::io::SeekFrom::Start(mark_info.start))
-                .map_err(|error| {
-                    Error::CouldNotReadData(format!(
-                        "Seek in mark {mark_info:?} in column ({}) failed: {error}",
-                        column_def.name
-                    ))
-                })?;
-            let mut granule_compressed_bytes = vec![0; (mark_info.end - mark_info.start) as usize];
-            file.read_exact(&mut granule_compressed_bytes)
-                .map_err(|error| {
-                    Error::CouldNotReadData(format!(
-                        "load error for column ({}) and mark ({mark_info:?}): {error}",
-                        column_def.name
-                    ))
-                })?;
-
-            let granule_bytes = decompress_bytes(
-                &granule_compressed_bytes,
-                &column_def.field_type.get_optimal_compression(),
-            )?;
-
-            let granule_values: Vec<Value> =
-                bincode::serde::decode_from_slice(&granule_bytes, bincode::config::standard())
-                    .map(|x| x.0)
-                    .map_err(|e| {
-                        Error::CouldNotReadData(format!("Failed to deserialize granule: {e}"))
-                    })?;
-
-            all_values.extend(granule_values);
+        if mark_info.end > file.len() as u64 {
+            return Err(Error::CouldNotReadData(format!(
+                "Mark end ({}) exceeds file size ({})",
+                mark_info.end,
+                file.len()
+            )));
         }
 
-        Ok(Column {
-            column_def: column_def.clone(),
-            data: all_values,
+        let compressed = &file[(mark_info.start as usize)..(mark_info.end as usize)];
+
+        decompress_bytes(compressed, compression_type)
+    }
+
+    /// Writes part info to disk with magic bytes and CRC32 checksum.
+    ///
+    /// Args:
+    ///   * `table_def`: Table definition for path resolution.
+    ///   * `raw`: If true, writes to raw directory; otherwise to normal directory.
+    ///
+    /// Returns:
+    ///   * Ok: on successful write.
+    ///   * Error: `CouldNotInsertData` on serialization or I/O failure.
+    pub fn write_to(&self, table_def: &TableDef, raw: bool) -> Result<()> {
+        let mut bytes = Vec::from(MAGIC_BYTES_INFO);
+
+        let data_bytes = rkyv::to_bytes::<rkyv::rancor::Error>(self).map_err(|error| {
+            Error::CouldNotInsertData(format!("Failed to serialize part info: {error}"))
+        })?;
+        let crc = crc32fast::hash(&data_bytes);
+
+        bytes.extend(&data_bytes[..]);
+        bytes.extend(crc.to_le_bytes());
+
+        let mut path = table_def.get_path();
+        if raw {
+            path.push("raw");
+        }
+        path.push(&self.name);
+        path.push(PART_INFO_FILENAME);
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| {
+                Error::CouldNotInsertData(format!("Failed to create directory: {error}"))
+            })?;
+        }
+
+        std::fs::write(path, bytes)
+            .map_err(|error| Error::CouldNotInsertData(format!("Failed to write file: {error}")))
+    }
+
+    /// Reads part info from disk, verifying magic bytes and CRC32 checksum.
+    ///
+    /// Returns:
+    ///   * Ok: `TablePartInfo` on successful read and validation.
+    ///   * Error: `CouldNotReadData` on I/O failure, invalid magic bytes, or CRC mismatch.
+    pub fn read_from(table_def: &TableDef, part_name: &str) -> Result<Self> {
+        let file_bytes = std::fs::read(
+            table_def
+                .get_path()
+                .join(part_name)
+                .join(PART_INFO_FILENAME),
+        )
+        .map_err(|error| {
+            Error::CouldNotReadData(format!("Failed to read part info file: {error}"))
+        })?;
+
+        if file_bytes.len() <= MAGIC_BYTES_INFO.len() + 4 {
+            return Err(Error::CouldNotReadData(
+                "Part info file is too small".to_string(),
+            ));
+        }
+
+        let file_magic_bytes = &file_bytes[0..MAGIC_BYTES_INFO.len()];
+        if file_magic_bytes != MAGIC_BYTES_INFO {
+            return Err(Error::CouldNotReadData(
+                "Invalid magic bytes in part info file".to_string(),
+            ));
+        }
+
+        let data_bytes = &file_bytes[MAGIC_BYTES_INFO.len()..(file_bytes.len() - 4)];
+
+        let expected_crc = u32::from_le_bytes([
+            file_bytes[file_bytes.len() - 4],
+            file_bytes[file_bytes.len() - 3],
+            file_bytes[file_bytes.len() - 2],
+            file_bytes[file_bytes.len() - 1],
+        ]);
+
+        let actual_crc = crc32fast::hash(data_bytes);
+        if expected_crc != actual_crc {
+            return Err(Error::CouldNotReadData(
+                "CRC mismatch in part info file".to_string(),
+            ));
+        }
+        // data is not aligned correctly, because of magic bytes
+        let mut aligned_data = rkyv::util::AlignedVec::<16>::with_capacity(data_bytes.len());
+        aligned_data.extend_from_slice(data_bytes);
+        rkyv::from_bytes::<TablePartInfo, rkyv::rancor::Error>(&aligned_data).map_err(|error| {
+            Error::CouldNotReadData(format!("Failed to deserialize part info: {error}"))
         })
     }
 }
@@ -208,8 +251,7 @@ impl TablePart {
             self.write_column_with_marks(col_idx, &column_file, granularity)?;
         }
 
-        let info_file = raw_dir.join(PART_INFO_FILENAME);
-        write_file_with_crc(&self.info, &info_file, MAGIC_BYTES_INFO)?;
+        self.info.write_to(table_def, true)?;
 
         Ok(())
     }
@@ -227,19 +269,22 @@ impl TablePart {
 
         for (granule_idx, chunk_start) in (0..total_rows).step_by(granule_size).enumerate() {
             let chunk_end = (chunk_start + granule_size).min(total_rows);
-            let granule_data = &self.data[col_idx].data[chunk_start..chunk_end];
+            let granule_data = self.data[col_idx].data[chunk_start..chunk_end]
+                .as_ref()
+                .to_vec();
 
             let start_pos = file_bytes.len() as u64;
 
             let granule_bytes =
-                bincode::serde::encode_to_vec(granule_data, bincode::config::standard()).map_err(
-                    |e| Error::CouldNotInsertData(format!("Failed to serialize granule: {e}")),
-                )?;
+                rkyv::to_bytes(&granule_data).map_err(|error: rkyv::rancor::Error| {
+                    Error::CouldNotInsertData(format!("Could not serialize data: {error}"))
+                })?;
             let granule_bytes = compress_bytes(
                 &granule_bytes,
                 &granule_data[0].get_type().get_optimal_compression(),
             )?;
             file_bytes.extend(&granule_bytes);
+
             let end_pos = file_bytes.len() as u64;
 
             if granule_idx >= self.info.marks.len() {
@@ -258,8 +303,9 @@ impl TablePart {
         let crc = crc32fast::hash(data_bytes);
         file_bytes.extend(crc.to_le_bytes());
 
-        std::fs::write(path, file_bytes)
-            .map_err(|e| Error::CouldNotInsertData(format!("Failed to write file: {e}")))
+        std::fs::write(path, file_bytes).map_err(|error| {
+            Error::CouldNotInsertData(format!("Failed to write column file: {error}"))
+        })
     }
 
     /// Atomically moves part from raw to normal directory and updates in-memory index.
@@ -268,18 +314,18 @@ impl TablePart {
     /// Rolls back memory change on filesystem failure.
     ///
     /// Returns: Ok or `CouldNotInsertData` with rollback on failure
-    pub fn move_to_normal(&self, table_def: &TableDef) -> Result<()> {
+    pub fn move_to_normal(self, table_def: &TableDef) -> Result<()> {
         let raw_dir = self.get_raw_dir(table_def);
         let normal_dir = table_def.get_path().join(&self.info.name);
 
-        let part_info = self.info.clone();
         let Some(mut result) = TABLE_DATA.get_mut(table_def) else {
             return Err(Error::TableNotFound);
         };
-        result.infos.push(part_info.clone());
+        let part_name = self.info.name.clone();
+        result.infos.push(self.info);
 
         if let Err(e) = std::fs::rename(&raw_dir, &normal_dir) {
-            result.infos.pop_if(|info| info.name == part_info.name);
+            result.infos.pop_if(|info| info.name == part_name);
             return Err(Error::CouldNotInsertData(format!(
                 "Failed to move part directory: {e}"
             )));
@@ -337,13 +383,13 @@ pub fn load_all_parts_on_startup(db_dir: &Path) -> Result<()> {
         return Ok(());
     }
 
-    let databases = std::fs::read_dir(db_dir).map_err(|e| {
-        Error::CouldNotInsertData(format!("Failed to read database directory: {e}"))
+    let databases = std::fs::read_dir(db_dir).map_err(|error| {
+        Error::CouldNotInsertData(format!("Failed to read database directory: {error}"))
     })?;
 
     for database_entry in databases {
-        let database_entry = database_entry.map_err(|e| {
-            Error::CouldNotInsertData(format!("Failed to read database entry: {e}"))
+        let database_entry = database_entry.map_err(|error| {
+            Error::CouldNotInsertData(format!("Failed to read database entry: {error}"))
         })?;
 
         let database_path = database_entry.path();
@@ -353,15 +399,15 @@ pub fn load_all_parts_on_startup(db_dir: &Path) -> Result<()> {
 
         let database_name = database_entry.file_name().to_string_lossy().to_string();
 
-        let tables = std::fs::read_dir(&database_path).map_err(|e| {
+        let tables = std::fs::read_dir(&database_path).map_err(|error| {
             Error::CouldNotInsertData(format!(
-                "Failed to read tables in database {database_name}: {e}"
+                "Failed to read tables in database {database_name}: {error}"
             ))
         })?;
 
         for table_entry in tables {
-            let table_entry = table_entry.map_err(|e| {
-                Error::CouldNotInsertData(format!("Failed to read table entry: {e}"))
+            let table_entry = table_entry.map_err(|error| {
+                Error::CouldNotInsertData(format!("Failed to read table entry: {error}"))
             })?;
 
             let table_path = table_entry.path();
@@ -375,12 +421,7 @@ pub fn load_all_parts_on_startup(db_dir: &Path) -> Result<()> {
                 table: table_name.clone(),
             };
 
-            let Ok(table_metadata) = read_file_with_crc::<TableMetadata>(
-                &table_def.get_path().join(TABLE_METADATA_FILENAME),
-                TABLE_METADATA_MAGIC_BYTES,
-            ) else {
-                continue;
-            };
+            let table_metadata = TableMetadata::read_from(&table_def)?;
 
             TABLE_DATA.insert(
                 table_def.clone(),
@@ -390,13 +431,15 @@ pub fn load_all_parts_on_startup(db_dir: &Path) -> Result<()> {
                 },
             );
 
-            let parts = std::fs::read_dir(&table_path).map_err(|e| {
-                Error::CouldNotInsertData(format!("Failed to read parts in table {table_def}: {e}"))
+            let parts = std::fs::read_dir(&table_path).map_err(|error| {
+                Error::CouldNotInsertData(format!(
+                    "Failed to read parts in table {table_def}: {error}"
+                ))
             })?;
 
             for part_entry in parts {
-                let part_entry = part_entry.map_err(|e| {
-                    Error::CouldNotInsertData(format!("Failed to read part entry: {e}"))
+                let part_entry = part_entry.map_err(|error| {
+                    Error::CouldNotInsertData(format!("Failed to read part entry: {error}"))
                 })?;
 
                 let part_path = part_entry.path();
@@ -428,8 +471,7 @@ pub fn load_all_parts_on_startup(db_dir: &Path) -> Result<()> {
                     continue;
                 }
 
-                let part_info_file_path = part_path.join(PART_INFO_FILENAME);
-                match read_file_with_crc::<TablePartInfo>(&part_info_file_path, MAGIC_BYTES_INFO) {
+                match TablePartInfo::read_from(&table_def, &part_name) {
                     Ok(info) => {
                         let Some(mut result) = TABLE_DATA.get_mut(&table_def) else {
                             continue;

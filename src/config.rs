@@ -83,7 +83,7 @@ impl Config {
     /// 3. Any `std::fs::create_dir_all()` error
     /// 4. When path already exists, but is not a directory
     fn ensure_directory_exists(dir: &PathBuf) {
-        std::fs::create_dir_all(dir).unwrap_or_else(|e| match e.kind() {
+        std::fs::create_dir_all(dir).unwrap_or_else(|error| match error.kind() {
             ErrorKind::PermissionDenied => {
                 panic!("Permission denied to create database")
             }

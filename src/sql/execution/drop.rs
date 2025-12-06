@@ -5,14 +5,16 @@ use crate::sql::CommandRunner;
 use crate::storage::{OutputTable, TableDef};
 
 impl CommandRunner {
+    /// Drops a table.
+    ///
+    /// Removes table entry in memory, deletes table directory.
+    ///
+    /// Returns:
+    ///   * Ok: `OutputTable` with success status
+    ///   * Error: `TableNotFound` or `Internal` on failure
     pub fn drop_table(table_def: &TableDef, if_exists: bool) -> Result<OutputTable> {
-        let lock = TABLE_DATA.remove(table_def);
+        let _ = TABLE_DATA.remove(table_def);
 
-        if lock.is_none() && if_exists {
-            return Ok(OutputTable::build_ok());
-        } else if lock.is_none() && !if_exists {
-            return Err(Error::TableNotFound);
-        }
         let table_path = table_def.get_path();
 
         let remove_result = std::fs::remove_dir_all(&table_path);
@@ -32,6 +34,13 @@ impl CommandRunner {
         }
     }
 
+    /// Drops a database.
+    ///
+    /// Removes table entries in memory, deletes database directory.
+    ///
+    /// Returns:
+    ///   * Ok: `OutputTable` with success status
+    ///   * Error: `DatabaseNotFound` or `Internal` on failure
     pub fn drop_database(name: &str, if_exists: bool) -> Result<OutputTable> {
         TABLE_DATA.retain(|x, _| x.database != name);
 

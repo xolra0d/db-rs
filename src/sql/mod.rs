@@ -1,4 +1,5 @@
 mod command_runner;
+mod compiled_filter;
 mod execution;
 mod logical_plan;
 mod plan_optimization;
@@ -11,9 +12,11 @@ use crate::storage::ColumnDef;
 
 use sqlparser::ast::Ident;
 
-/// Validate the name of fields, databases, columns.
-/// Returns true if `name` consists of english alphabet, numbers and underscore
-/// Otherwise returns false
+/// Validates the name of fields, databases, columns.
+///
+/// Returns:
+///   * `true` when: name is non-empty and consists only of ASCII alphanumeric characters or underscore.
+///   * `false` when: name is empty or contains invalid characters.
 pub fn validate_name(name: &str) -> bool {
     !name.is_empty()
         && name
@@ -21,6 +24,11 @@ pub fn validate_name(name: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
+/// Parses an identifier and finds matching column definition.
+///
+/// Returns:
+///   * Ok: `ColumnDef` when column with matching name is found.
+///   * Error: `ColumnNotFound` when no matching column exists.
 pub fn parse_ident(ident: &Ident, columns: &[ColumnDef]) -> Result<ColumnDef> {
     if let Some(column_def) = columns.iter().find(|col| col.name == ident.value) {
         Ok(column_def.clone())

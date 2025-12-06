@@ -52,7 +52,11 @@ impl From<RMPError> for ProtocolError {
     }
 }
 
-/// Structure used to implement `tokio_util::codec::{Decoder, Encoder}` traits.
+/// TCP protocol parser implementing `tokio_util::codec::{Decoder, Encoder}` traits.
+///
+/// Protocol format:
+/// - Header: 8-byte little-endian u64 containing body size
+/// - Body: UTF-8 encoded SQL command (for decoding) or `MessagePack` response (for encoding)
 pub struct Parser;
 
 impl Decoder for Parser {

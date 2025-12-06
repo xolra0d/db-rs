@@ -1,14 +1,20 @@
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::runtime_config::{DATABASE_LOAD, TABLE_DATA};
-use crate::storage::{Column, TableDef, TablePart, TablePartInfo};
+use crate::storage::{Column, TableDef, TablePart, TablePartInfo, Value};
 
 use crate::config::CONFIG;
 use log::{error, info, warn};
 use uuid::Uuid;
 
+/// Background merge service that combines table parts to optimize storage and queries.
 pub struct BackgroundMerge;
 
 impl BackgroundMerge {
+    /// Starts the background merge loop.
+    ///
+    /// Continuously monitors tables for parts that can be merged. When database load
+    /// is below threshold and two parts exist, merges them into a single part.
+    /// Runs indefinitely until the process is terminated.
     pub fn start() {
         info!("Background merges started");
         loop {
@@ -49,13 +55,18 @@ impl BackgroundMerge {
                 continue;
             }
 
-            if !Self::atomic_part_move(merge_data, &new_part) {
+            if !Self::atomic_part_move(merge_data, new_part) {
                 error!("Failed to move merged TablePart");
                 std::thread::sleep(std::time::Duration::from_secs(1));
             }
         }
     }
 
+    /// Loads all columns from a table part into memory.
+    ///
+    /// Returns:
+    ///   * Ok: `Vec<Column>` with all part data.
+    ///   * Error: `CouldNotReadData` on I/O or deserialization failure.
     fn load_part(table_def: &TableDef, part: &TablePartInfo) -> Result<Vec<Column>> {
         let mut columns = Vec::new();
 
@@ -66,13 +77,38 @@ impl BackgroundMerge {
                 marks[mark_idx].push(mark_info.clone());
             }
         }
+
         for (col_idx, column_def) in part.column_defs.iter().enumerate() {
-            let val = part.read_column(table_def, column_def, marks[col_idx].as_slice())?;
-            columns.push(val);
+            let mmap = Column::open_as_mmap(&part.get_column_path(table_def, column_def))?;
+
+            let mut data = Vec::new();
+            for mark_info in &marks[col_idx] {
+                let granule_data = TablePartInfo::get_granule_bytes_decompressed(
+                    &mmap,
+                    mark_info,
+                    &column_def.constraints.compression_type,
+                )?;
+                let granule_data = rkyv::from_bytes::<Vec<Value>, rkyv::rancor::Error>(
+                    &granule_data,
+                )
+                .map_err(|error| {
+                    Error::CouldNotReadData(format!("Could not read data while merging: {error}"))
+                })?;
+                data.extend(granule_data);
+            }
+            let column = Column {
+                column_def: column_def.clone(),
+                data,
+            };
+            columns.push(column);
         }
         Ok(columns)
     }
 
+    /// Merges two parts' columns into one.
+    ///
+    /// Extends `part_0` with data from `part_1`. If a column exists in `part_1` but not `part_0`,
+    /// fills missing rows with default values.
     fn merge_parts(mut part_0: Vec<Column>, part_1: Vec<Column>) -> Vec<Column> {
         for column_1 in part_1 {
             if let Some(position) = part_0
@@ -99,6 +135,9 @@ impl BackgroundMerge {
         part_0
     }
 
+    /// Loads both parts to be merged into memory.
+    ///
+    /// Returns: `Some((part_0_cols, part_1_cols))` on success, `None` on failure.
     fn load_both_parts(merge_data: &MergeData) -> Option<(Vec<Column>, Vec<Column>)> {
         let part_0_cols = Self::load_part(&merge_data.table_def, &merge_data.part_0)
             .map_err(|error| {
@@ -123,7 +162,13 @@ impl BackgroundMerge {
         Some((part_0_cols, part_1_cols))
     }
 
-    fn atomic_part_move(merge_data: MergeData, new_part: &TablePart) -> bool {
+    /// Atomically replaces old parts with the merged part.
+    ///
+    /// Renames old parts to `.old` suffix, updates in-memory index, moves new part,
+    /// and cleans up old directories. Rolls back on failure.
+    ///
+    /// Returns: `true` on success, `false` on failure (with rollback attempted).
+    fn atomic_part_move(merge_data: MergeData, new_part: TablePart) -> bool {
         // prevent from new selects
         let Some(mut config) = TABLE_DATA.get_mut(&merge_data.table_def) else {
             warn!("could not get mutable table config");

@@ -1,12 +1,16 @@
-use serde::{Deserialize, Serialize};
+use crate::error::{Error, Result};
+
+use rkyv::{Archive as RkyvArchive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
+use serde::Serialize;
 use sqlparser::ast::{DataType as SQLDatatype, Value as SQLValue};
 use std::cmp::Ordering;
 use uuid::Uuid;
 
-use crate::error::{Error, Result};
-
 /// Represents a parsed value in our custom protocol
-#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[derive(
+    Clone, Debug, PartialEq, Default, Serialize, RkyvSerialize, RkyvArchive, RkyvDeserialize,
+)]
+#[rkyv(derive(Debug), compare(PartialEq))]
 pub enum Value {
     #[default]
     Null,
@@ -80,7 +84,9 @@ impl TryFrom<(SQLValue, &ValueType)> for Value {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Hash, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Hash, PartialEq, Eq, Serialize, RkyvSerialize, RkyvArchive, RkyvDeserialize,
+)]
 pub enum ValueType {
     Null,
     String,
@@ -120,6 +126,7 @@ impl TryFrom<&SQLDatatype> for ValueType {
 }
 
 impl Value {
+    /// Returns the `ValueType` corresponding to this value.
     pub fn get_type(&self) -> ValueType {
         match &self {
             Value::Null => ValueType::Null,
@@ -141,59 +148,99 @@ impl Value {
 impl PartialOrd for Value {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match (self, other) {
+            (Value::Null, Value::Null) => Some(Ordering::Equal), // todo: maybe replace with not eq..
             (Value::String(l), Value::String(r)) => Some(l.cmp(r)),
             (Value::Bool(l), Value::Bool(r)) => Some(l.cmp(r)),
             (Value::Uuid(l), Value::Uuid(r)) => Some(l.cmp(r)),
-            (Value::Null, Value::Null) => Some(Ordering::Equal), // todo: maybe replace with not eq..
-
-            (
-                l @ (Value::Int8(_) | Value::Int16(_) | Value::Int32(_) | Value::Int64(_)),
-                r @ (Value::Int8(_) | Value::Int16(_) | Value::Int32(_) | Value::Int64(_)),
-            ) => Some(to_i64(l)?.cmp(&to_i64(r)?)),
-
-            (
-                l @ (Value::UInt8(_) | Value::UInt16(_) | Value::UInt32(_) | Value::UInt64(_)),
-                r @ (Value::UInt8(_) | Value::UInt16(_) | Value::UInt32(_) | Value::UInt64(_)),
-            ) => Some(to_u64(l)?.cmp(&to_u64(r)?)),
-
-            (
-                l @ (Value::Int8(_) | Value::Int16(_) | Value::Int32(_) | Value::Int64(_)),
-                r @ (Value::UInt8(_) | Value::UInt16(_) | Value::UInt32(_) | Value::UInt64(_)),
-            ) => Some(compare_signed_unsigned(to_i64(l)?, to_u64(r)?)),
-
-            (
-                l @ (Value::UInt8(_) | Value::UInt16(_) | Value::UInt32(_) | Value::UInt64(_)),
-                r @ (Value::Int8(_) | Value::Int16(_) | Value::Int32(_) | Value::Int64(_)),
-            ) => Some(compare_signed_unsigned(to_i64(r)?, to_u64(l)?).reverse()),
+            (Value::Int8(l), Value::Int8(r)) => Some(l.cmp(r)),
+            (Value::Int16(l), Value::Int16(r)) => Some(l.cmp(r)),
+            (Value::Int32(l), Value::Int32(r)) => Some(l.cmp(r)),
+            (Value::Int64(l), Value::Int64(r)) => Some(l.cmp(r)),
+            (Value::UInt8(l), Value::UInt8(r)) => Some(l.cmp(r)),
+            (Value::UInt16(l), Value::UInt16(r)) => Some(l.cmp(r)),
+            (Value::UInt32(l), Value::UInt32(r)) => Some(l.cmp(r)),
+            (Value::UInt64(l), Value::UInt64(r)) => Some(l.cmp(r)),
             _ => None,
         }
     }
 }
 
-fn to_i64(val: &Value) -> Option<i64> {
-    match val {
-        Value::Int8(v) => Some(i64::from(*v)),
-        Value::Int16(v) => Some(i64::from(*v)),
-        Value::Int32(v) => Some(i64::from(*v)),
-        Value::Int64(v) => Some(*v),
-        _ => None,
+impl PartialOrd<ArchivedValue> for Value {
+    fn partial_cmp(&self, rhs: &ArchivedValue) -> Option<Ordering> {
+        match (self, rhs) {
+            (Self::Null, ArchivedValue::Null) => Some(Ordering::Equal),
+            (Self::String(l), ArchivedValue::String(r)) => l.partial_cmp(r),
+            (Self::Uuid(l), ArchivedValue::Uuid(r)) => l.partial_cmp(r),
+            (Self::Bool(l), ArchivedValue::Bool(r)) => l.partial_cmp(r),
+            (Self::Int8(l), ArchivedValue::Int8(r)) => l.partial_cmp(r),
+            (Self::Int16(l), ArchivedValue::Int16(r)) => l.partial_cmp(&r.to_native()),
+            (Self::Int32(l), ArchivedValue::Int32(r)) => l.partial_cmp(&r.to_native()),
+            (Self::Int64(l), ArchivedValue::Int64(r)) => l.partial_cmp(&r.to_native()),
+            (Self::UInt8(l), ArchivedValue::UInt8(r)) => l.partial_cmp(r),
+            (Self::UInt16(l), ArchivedValue::UInt16(r)) => l.partial_cmp(&r.to_native()),
+            (Self::UInt32(l), ArchivedValue::UInt32(r)) => l.partial_cmp(&r.to_native()),
+            (Self::UInt64(l), ArchivedValue::UInt64(r)) => l.partial_cmp(&r.to_native()),
+            _ => None,
+        }
     }
 }
 
-fn to_u64(val: &Value) -> Option<u64> {
-    match val {
-        Value::UInt8(v) => Some(u64::from(*v)),
-        Value::UInt16(v) => Some(u64::from(*v)),
-        Value::UInt32(v) => Some(u64::from(*v)),
-        Value::UInt64(v) => Some(*v),
-        _ => None,
+impl PartialOrd<Value> for ArchivedValue {
+    fn partial_cmp(&self, rhs: &Value) -> Option<Ordering> {
+        match (self, rhs) {
+            (Self::Null, Value::Null) => Some(Ordering::Equal),
+            (Self::String(l), Value::String(r)) => l.partial_cmp(r),
+            (Self::Uuid(l), Value::Uuid(r)) => l.partial_cmp(r),
+            (Self::Bool(l), Value::Bool(r)) => l.partial_cmp(r),
+            (Self::Int8(l), Value::Int8(r)) => l.partial_cmp(r),
+            (Self::Int16(l), Value::Int16(r)) => l.to_native().partial_cmp(r),
+            (Self::Int32(l), Value::Int32(r)) => l.to_native().partial_cmp(r),
+            (Self::Int64(l), Value::Int64(r)) => l.to_native().partial_cmp(r),
+            (Self::UInt8(l), Value::UInt8(r)) => l.partial_cmp(r),
+            (Self::UInt16(l), Value::UInt16(r)) => l.to_native().partial_cmp(r),
+            (Self::UInt32(l), Value::UInt32(r)) => l.to_native().partial_cmp(r),
+            (Self::UInt64(l), Value::UInt64(r)) => l.to_native().partial_cmp(r),
+            _ => None,
+        }
     }
 }
 
-fn compare_signed_unsigned(signed: i64, unsigned: u64) -> Ordering {
-    if signed < 0 || unsigned > i64::MAX as u64 {
-        Ordering::Less
-    } else {
-        signed.cmp(&(unsigned as i64))
+impl PartialEq<ArchivedValue> for ArchivedValue {
+    fn eq(&self, rhs: &ArchivedValue) -> bool {
+        match (self, rhs) {
+            (Self::Null, ArchivedValue::Null) => true,
+            (Self::String(l), ArchivedValue::String(r)) => l == r,
+            (Self::Uuid(l), ArchivedValue::Uuid(r)) => l == r,
+            (Self::Bool(l), ArchivedValue::Bool(r)) => l == r,
+            (Self::Int8(l), ArchivedValue::Int8(r)) => l == r,
+            (Self::Int16(l), ArchivedValue::Int16(r)) => l == r,
+            (Self::Int32(l), ArchivedValue::Int32(r)) => l == r,
+            (Self::Int64(l), ArchivedValue::Int64(r)) => l == r,
+            (Self::UInt8(l), ArchivedValue::UInt8(r)) => l == r,
+            (Self::UInt16(l), ArchivedValue::UInt16(r)) => l == r,
+            (Self::UInt32(l), ArchivedValue::UInt32(r)) => l == r,
+            (Self::UInt64(l), ArchivedValue::UInt64(r)) => l == r,
+            _ => false,
+        }
+    }
+}
+
+impl PartialOrd<ArchivedValue> for ArchivedValue {
+    fn partial_cmp(&self, rhs: &ArchivedValue) -> Option<Ordering> {
+        match (self, rhs) {
+            (ArchivedValue::Null, ArchivedValue::Null) => Some(Ordering::Equal), // todo: maybe replace with not eq..
+            (Self::String(l), ArchivedValue::String(r)) => l.partial_cmp(r),
+            (Self::Uuid(l), ArchivedValue::Uuid(r)) => l.partial_cmp(r),
+            (Self::Bool(l), ArchivedValue::Bool(r)) => l.partial_cmp(r),
+            (Self::Int8(l), ArchivedValue::Int8(r)) => l.partial_cmp(r),
+            (Self::Int16(l), ArchivedValue::Int16(r)) => l.partial_cmp(&r.to_native()),
+            (Self::Int32(l), ArchivedValue::Int32(r)) => l.partial_cmp(&r.to_native()),
+            (Self::Int64(l), ArchivedValue::Int64(r)) => l.partial_cmp(&r.to_native()),
+            (Self::UInt8(l), ArchivedValue::UInt8(r)) => l.partial_cmp(r),
+            (Self::UInt16(l), ArchivedValue::UInt16(r)) => l.partial_cmp(&r.to_native()),
+            (Self::UInt32(l), ArchivedValue::UInt32(r)) => l.partial_cmp(&r.to_native()),
+            (Self::UInt64(l), ArchivedValue::UInt64(r)) => l.partial_cmp(&r.to_native()),
+            _ => None,
+        }
     }
 }

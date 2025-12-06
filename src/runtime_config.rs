@@ -16,11 +16,15 @@ pub static TABLE_DATA: std::sync::LazyLock<DashMap<TableDef, TableConfig>> =
 pub static DATABASE_LOAD: std::sync::LazyLock<AtomicU32> =
     std::sync::LazyLock::new(AtomicU32::default);
 
+/// RAII guard that decrements `DATABASE_LOAD` on drop.
+///
+/// Used to track query complexity and automatically release resources when query completes.
 pub struct ComplexityGuard {
     complexity: u32,
 }
 
 impl ComplexityGuard {
+    /// Creates a new complexity guard with the given complexity value.
     pub fn new(complexity: u32) -> Self {
         Self { complexity }
     }
