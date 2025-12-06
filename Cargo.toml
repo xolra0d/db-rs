@@ -25,4 +25,4 @@ memmap2 = "0.9.9"
 [profile.release]
 lto = "thin"
 codegen-units = 1
-debug = true
+# debug = true
