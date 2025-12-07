@@ -136,6 +136,7 @@ TouchHouse uses only 2 unsafe functions:
 vs Clickhouse:
 * 30% slower.
 * Lighter executable - TouchHouse 5.9MB vs ClickHouse 728.5MB.
+
 vs MariDB:
 * 38x faster.
 * Requires complex installation. TouchHouse is a single binary.
