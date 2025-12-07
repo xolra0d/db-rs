@@ -1,5 +1,3 @@
-!!UNDER DEVELOPMENT!!
----
 # TouchHouse - Blazingly Fast Column-Oriented Database
 ___
 ## Modules
@@ -11,21 +9,18 @@ ___
 ___
 ## Installation & Usage
 
-### Prerequisites
-- [Rust](https://rustup.rs/)
-
 ### Quick Start
-1. **Clone the repository**:
+1. **Grap binary**:
    ```bash
-   git clone <repository-url>
-   cd touchhouse
+   curl -L https://github.com/xolra0d/touchhouse/releases/latest/download/touchhouse -o touchhouse
    ```
 
 2. **Run the server**:
    ```bash
-   cargo run --release
+   chmod +x touchouse
+   ./touchouse
    ```
-   The server will start on `127.0.0.1:7070` by default.
+   The server will create default configuration and start on `127.0.0.1:7070`.
 
 ### Example Usage
 
@@ -37,43 +32,34 @@ python3 client.py HOST PORT
 
 ### Example Database Operations
 ```bash
-# Create a database
 CREATE DATABASE mydb;
-
-# Create a table
 CREATE TABLE my_db.users (id UUID, name String, age UInt8) ENGINE=MergeTree ORDER BY (name, age)
-
-# Insert data
 INSERT INTO my_db.users (id, name, age) VALUES ('123e4567-e89b-12d3-a456-426614174000', 'Alice', 30)
+SELECT * FROM my_db.users WHERE name = 'Alice' LIMIT 1
 ```
 ___
 ## Tech Stack
-- **[`tokio`](https://tokio.rs/)** - Async runtime for Rust
-- **[`futures`](https://docs.rs/futures/)** - Async primitives and utilities
-- **[`log`](https://docs.rs/log/)** - Logging facade
-- **[`env_logger`](https://docs.rs/env_logger/)** - Logging implementation
-- **[`tokio_util`](https://docs.rs/tokio-util/)** - Tokio utilities and codecs
-- **[`serde`](https://docs.rs/serde/)** - Serializing and deserializing framework
-- **[`rmp_serde`](https://docs.rs/rmp-serde/)** - Rust MessagePack library
-- **[`bincode`](https://docs.rs/bincode/)** - Fast serializing/deserializing protocol
-- **[`sqlparser`](sqhttps://docs.rs/sqlparser/)** - Apache Datafusion SQL to AST parser
-
-## Data types
-- String
-- Uuid
-- Bool
-- Int8
-- Int16
-- Int32
-- Int64
-- UInt8
-- UInt16
-- UInt32
-- UInt64
-
+- **[`tokio`](https://tokio.rs/)** - Async runtime for Rust.
+- **[`futures`](https://docs.rs/futures/)** - Async primitives and utilities.
+- **[`log`](https://docs.rs/log/)** - Logging facade.
+- **[`env_logger`](https://docs.rs/env_logger/)** - Logging implementation.
+- **[`tokio_util`](https://docs.rs/tokio-util/)** - Tokio utilities and codecs.
+- **[`serde`](https://docs.rs/serde/)** - Serializing and deserializing framework.
+- **[`rmp_serde`](https://docs.rs/rmp-serde/)** - Rust MessagePack library.
+- **[`sqlparser`](https://docs.rs/sqlparser/)** - Apache Datafusion SQL to AST parser.
+- **[`toml`](https://docs.rs/toml/)** - Toml configuration.
+- **[`uuid`](https://docs.rs/uuid/)** - Uuid support.
+- **[`derive_more`](https://docs.rs/derive_more/)** - Display support for enums.
+- **[`lz4`](https://docs.rs/lz4/)** - LZ4 compression/decompression.
+- **[`dashmap`](https://docs.rs/dashmap/)** - Global runtime configuration.
+- **[`rkyv`](https://docs.rs/rkyv/)** - Zero copy deserialization.
+- **[`rayon`](https://docs.rs/rayon/)** - Program parallelization.
+- **[`memmap2`](https://docs.rs/memmap2/)** - File memory mapping for faster access.
 
 ## Docs
-For more in-depth description read `cargo doc --open`.
+Read more in `docs/`.
+
+For more in-depth description `cargo doc --open`.
 
 ## License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
