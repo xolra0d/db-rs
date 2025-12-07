@@ -22,7 +22,7 @@ max_connections = 100
 log_level = 1
 
 # Signifies when database can do background merges of parts, depending on database load
-background_merge_available_under = 30"#;
+background_merge_available_under = 5"#;
 
 /// Server configuration
 #[derive(Debug, Deserialize)]

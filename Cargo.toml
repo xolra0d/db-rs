@@ -23,6 +23,7 @@ rayon = "1.11.0"
 memmap2 = "0.9.9"
 
 [profile.release]
-lto = "thin"
 codegen-units = 1
+lto = true
+strip = true
 # debug = true
